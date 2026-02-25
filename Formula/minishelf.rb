@@ -5,12 +5,12 @@ class Minishelf < Formula
 
   on_macos do
     url "https://github.com/rc-code-jp/minishelf/releases/download/v#{version}/minishelf-#{version}-macos-aarch64.tar.gz"
-    sha256 "9a8ddbeed6f17c6f1d6a94f1e92c09c0e15c9f3252d7ba8a9c923a4138129784"
+    sha256 "2b008c57598570f979abe63bd64ec96de425dd0288437e61432294bb6be67d7c"
   end
 
   on_linux do
     url "https://github.com/rc-code-jp/minishelf/releases/download/v#{version}/minishelf-#{version}-linux-x86_64.tar.gz"
-    sha256 "4cd51291a6f6d4a8ef88e4dd68688994422517f4addb786134da64d0664e04e5"
+    sha256 "9a8ddbeed6f17c6f1d6a94f1e92c09c0e15c9f3252d7ba8a9c923a4138129784"
   end
 
   def install

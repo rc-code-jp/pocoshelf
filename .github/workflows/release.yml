@@ -138,19 +138,21 @@ jobs:
             raise SystemExit("Failed to update formula version")
 
           text, n2 = re.subn(
-              r'(?m)^    sha256 "[a-f0-9]{64}"$',
-              f'    sha256 "{mac_sha}"',
+              r'(on_macos do\s+url "[^"]+"\s+sha256 )"[a-f0-9]{64}"',
+              r'\1"' + mac_sha + '"',
               text,
               count=1,
+              flags=re.MULTILINE,
           )
           if n2 != 1:
             raise SystemExit("Failed to update macOS checksum")
 
           text, n3 = re.subn(
-              r'(?m)^    sha256 "[a-f0-9]{64}"$',
-              f'    sha256 "{linux_sha}"',
+              r'(on_linux do\s+url "[^"]+"\s+sha256 )"[a-f0-9]{64}"',
+              r'\1"' + linux_sha + '"',
               text,
               count=1,
+              flags=re.MULTILINE,
           )
           if n3 != 1:
             raise SystemExit("Failed to update Linux checksum")
