@@ -19,9 +19,11 @@ cargo run -- /path/to/project
 
 Key bindings:
 
-- `j`/`k` or `Down`/`Up`: move selection
-- `h`/`Left`: collapse or move to parent
-- `l`/`Right`/`Enter`: expand directory
+- `j`/`k` or `Down`/`Up`: move tree selection (tree focus) / scroll preview (preview focus)
+- `h`/`Left`/`Esc`: return focus to tree, or collapse/move to parent when tree is focused
+- `l`/`Right`/`Enter`: open selected file into preview focus, or expand selected directory
+- `Ctrl+u`/`PageUp`: preview scroll up
+- `Ctrl+d`/`PageDown`: preview scroll down
 - `r`: refresh git status
 - `y`: copy `@`-relative path to clipboard
 - `q`: quit

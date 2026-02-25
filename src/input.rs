@@ -10,7 +10,7 @@ pub fn map_event(key: KeyEvent) -> Option<Command> {
         (KeyCode::Char('l'), _) | (KeyCode::Right, _) | (KeyCode::Enter, _) => {
             Some(Command::ExpandOrOpen)
         }
-        (KeyCode::Char('h'), _) | (KeyCode::Left, _) => Some(Command::Collapse),
+        (KeyCode::Char('h'), _) | (KeyCode::Left, _) | (KeyCode::Esc, _) => Some(Command::Collapse),
         (KeyCode::Char('r'), _) => Some(Command::RefreshGit),
         (KeyCode::Char('y'), _) => Some(Command::CopyRelativePath),
         (KeyCode::Char('u'), KeyModifiers::CONTROL) | (KeyCode::PageUp, _) => {

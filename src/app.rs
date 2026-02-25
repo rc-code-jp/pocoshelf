@@ -6,17 +6,24 @@ use std::time::{Duration, Instant};
 use arboard::Clipboard;
 
 use crate::git_status::{GitSnapshot, GitState};
-use crate::preview::{PreviewKind, PreviewState, MAX_PREVIEW_BYTES};
+use crate::preview::{PreviewKind, PreviewState};
 use crate::tree::Tree;
 
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 pub const TREE_RATIO_PERCENT: u16 = 20;
 const COPY_STATUS_DURATION: Duration = Duration::from_secs(3);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusPane {
+    Tree,
+    Preview,
+}
+
 pub struct App {
     pub startup_root: PathBuf,
     pub tree: Tree,
     pub preview: PreviewState,
+    pub focus: FocusPane,
     pub git: GitSnapshot,
     pub status_message: String,
     pub last_git_refresh: Instant,
@@ -47,13 +54,14 @@ impl App {
         let tree = Tree::new(startup_root.clone())?;
 
         let git = GitSnapshot::collect(&startup_root);
-        let preview = PreviewState::from_path(tree.selected_path(), MAX_PREVIEW_BYTES);
+        let preview = PreviewState::from_path(&startup_root, tree.selected_path());
         let (git_refresh_tx, git_refresh_rx) = mpsc::channel();
 
         Ok(Self {
             startup_root,
             tree,
             preview,
+            focus: FocusPane::Tree,
             git,
             status_message: String::from("ready"),
             last_git_refresh: Instant::now(),
@@ -70,23 +78,40 @@ impl App {
     pub fn handle_command(&mut self, command: Command) {
         self.poll_background_tasks();
         match command {
-            Command::MoveUp => {
-                self.tree.move_up();
-                self.sync_preview();
-            }
-            Command::MoveDown => {
-                self.tree.move_down();
-                self.sync_preview();
-            }
-            Command::ExpandOrOpen => {
-                if let Err(err) = self.tree.expand_selected() {
-                    self.status_message = format!("expand failed: {err}");
+            Command::MoveUp => match self.focus {
+                FocusPane::Tree => {
+                    self.tree.move_up();
+                    self.sync_preview();
                 }
-                self.sync_preview();
+                FocusPane::Preview => self.preview.scroll_up(1),
+            },
+            Command::MoveDown => match self.focus {
+                FocusPane::Tree => {
+                    self.tree.move_down();
+                    self.sync_preview();
+                }
+                FocusPane::Preview => self.preview.scroll_down(1),
+            },
+            Command::ExpandOrOpen => {
+                if self.focus == FocusPane::Tree {
+                    if self.tree.selected_is_dir() {
+                        if let Err(err) = self.tree.expand_selected() {
+                            self.status_message = format!("expand failed: {err}");
+                        }
+                        self.sync_preview();
+                    } else {
+                        self.sync_preview();
+                        self.focus = FocusPane::Preview;
+                    }
+                }
             }
             Command::Collapse => {
-                self.tree.collapse_selected();
-                self.sync_preview();
+                if self.focus == FocusPane::Preview {
+                    self.focus = FocusPane::Tree;
+                } else {
+                    self.tree.collapse_selected();
+                    self.sync_preview();
+                }
             }
             Command::PreviewUp => self.preview.scroll_up(1),
             Command::PreviewDown => self.preview.scroll_down(1),
@@ -153,7 +178,7 @@ impl App {
     }
 
     fn sync_preview(&mut self) {
-        self.preview = PreviewState::from_path(self.tree.selected_path(), MAX_PREVIEW_BYTES);
+        self.preview = PreviewState::from_path(&self.startup_root, self.tree.selected_path());
     }
 
     fn copy_relative_path(&mut self) {
@@ -179,9 +204,23 @@ impl App {
 
     pub fn preview_title(&self) -> &'static str {
         match self.preview.kind {
-            PreviewKind::Text => "Preview",
+            PreviewKind::Text => {
+                if self.preview.is_diff_view() {
+                    "Preview (diff)"
+                } else {
+                    "Preview (file)"
+                }
+            }
             PreviewKind::Message => "Preview (message)",
         }
+    }
+
+    pub fn is_tree_focused(&self) -> bool {
+        self.focus == FocusPane::Tree
+    }
+
+    pub fn is_preview_focused(&self) -> bool {
+        self.focus == FocusPane::Preview
     }
 
     fn set_temporary_status(&mut self, msg: impl Into<String>) {

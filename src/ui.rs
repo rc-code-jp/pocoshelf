@@ -59,7 +59,11 @@ fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
 
     let title = format!("Dir: {}", app.tree.current_dir.display());
-    let tree = Paragraph::new(lines).block(Block::default().title(title).borders(Borders::ALL));
+    let mut block = Block::default().title(title).borders(Borders::ALL);
+    if app.is_tree_focused() {
+        block = block.border_style(Style::default().fg(Color::Cyan));
+    }
+    let tree = Paragraph::new(lines).block(block);
     frame.render_widget(tree, area);
 }
 
@@ -70,24 +74,51 @@ fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let lines = app.preview.lines[start..end]
         .iter()
-        .map(|line| Line::from(Span::raw(line.as_str())))
+        .map(|line| {
+            let style = if app.preview.is_diff_view() {
+                style_for_diff_line(line)
+            } else {
+                Style::default()
+            };
+            Line::from(Span::styled(line.as_str(), style))
+        })
         .collect::<Vec<_>>();
 
-    let preview = Paragraph::new(lines)
-        .block(Block::default().title(app.preview_title()).borders(Borders::ALL));
+    let mut block = Block::default().title(app.preview_title()).borders(Borders::ALL);
+    if app.is_preview_focused() {
+        block = block.border_style(Style::default().fg(Color::Cyan));
+    }
+    let preview = Paragraph::new(lines).block(block);
 
     frame.render_widget(preview, area);
 }
 
 fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let status = format!(
-        "{} | selected: {} | keys: j/k/h/l arrows r y q",
+        "{} | selected: {} | focus: {} | keys: j/k h/l enter/esc arrows r y q",
         app.status_message,
-        app.tree.selected_path().display()
+        app.tree.selected_path().display(),
+        if app.is_tree_focused() { "tree" } else { "preview" }
     );
 
     let line = Line::from(Span::styled(status, Style::default().fg(Color::DarkGray)));
     frame.render_widget(Paragraph::new(line), area);
+}
+
+fn style_for_diff_line(line: &str) -> Style {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        return Style::default().fg(Color::Green).bg(Color::Rgb(20, 45, 20));
+    }
+
+    if line.starts_with('-') && !line.starts_with("---") {
+        return Style::default().fg(Color::Red).bg(Color::Rgb(50, 20, 20));
+    }
+
+    if line.starts_with(' ') {
+        return Style::default().fg(Color::Gray).bg(Color::Rgb(30, 30, 30));
+    }
+
+    Style::default()
 }
 
 fn style_for_git(state: GitState) -> Style {

@@ -80,6 +80,13 @@ impl Tree {
         self.selected
     }
 
+    pub fn selected_is_dir(&self) -> bool {
+        self.entries
+            .get(self.selected)
+            .map(|entry| entry.is_dir)
+            .unwrap_or(false)
+    }
+
     fn reload_entries(&mut self, prefer_selected_path: Option<&Path>) -> anyhow::Result<()> {
         let read_dir = fs::read_dir(&self.current_dir)?;
         let mut entries = Vec::new();
