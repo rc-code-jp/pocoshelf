@@ -59,11 +59,10 @@ git push origin v0.1.0
 
 3. GitHub Actions builds binaries and creates release assets:
    - `minishelf-<version>-linux-x86_64.tar.gz`
-   - `minishelf-<version>-macos-x86_64.tar.gz`
    - `minishelf-<version>-macos-aarch64.tar.gz`
    - `checksums.txt`
 
-4. Update Homebrew formula checksums from `checksums.txt`.
+4. Homebrew formula is updated automatically by the same workflow after release artifacts are published.
 
 ## Homebrew tap formula template
 
