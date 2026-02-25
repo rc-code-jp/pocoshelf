@@ -1,0 +1,82 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            archive_suffix: linux-x86_64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive_suffix: macos-x86_64
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive_suffix: macos-aarch64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          pkg="minishelf-${version}-${{ matrix.archive_suffix }}"
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/minishelf" minishelf
+          chmod +x minishelf
+          tar -czf "dist/${pkg}.tar.gz" minishelf
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: minishelf-${{ matrix.archive_suffix }}
+          path: dist/*.tar.gz
+
+  release:
+    name: create release
+    runs-on: ubuntu-24.04
+    needs: build
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          shasum -a 256 *.tar.gz > checksums.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
