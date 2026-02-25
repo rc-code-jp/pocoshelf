@@ -28,7 +28,24 @@ Key bindings:
 
 ## User install (no Rust required)
 
-Use GitHub Releases artifacts, or install via Homebrew tap that points to those artifacts.
+### Homebrew tap (this repository)
+
+```bash
+brew tap rc-code-jp/minishelf https://github.com/rc-code-jp/minishelf
+brew install minishelf
+```
+
+Or directly:
+
+```bash
+brew install rc-code-jp/minishelf/minishelf
+```
+
+Current binary targets:
+- macOS Apple Silicon (`aarch64`)
+- Linux x86_64
+
+Intel macOS binary is not published yet.
 
 ## Maintainer release flow
 
@@ -55,5 +72,4 @@ Copy it to your tap repo (e.g. `homebrew-minishelf/Formula/minishelf.rb`) and re
 
 - `__VERSION__`
 - `__SHA256_MACOS_ARM64__`
-- `__SHA256_MACOS_X86_64__`
 - `__SHA256_LINUX_X86_64__`

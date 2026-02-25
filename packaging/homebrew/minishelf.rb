@@ -4,13 +4,8 @@ class Minishelf < Formula
   version "__VERSION__"
 
   on_macos do
-    if Hardware::CPU.arm?
-      url "https://github.com/YOUR_GITHUB_USER/minishelf/releases/download/v#{version}/minishelf-#{version}-macos-aarch64.tar.gz"
-      sha256 "__SHA256_MACOS_ARM64__"
-    else
-      url "https://github.com/YOUR_GITHUB_USER/minishelf/releases/download/v#{version}/minishelf-#{version}-macos-x86_64.tar.gz"
-      sha256 "__SHA256_MACOS_X86_64__"
-    end
+    url "https://github.com/YOUR_GITHUB_USER/minishelf/releases/download/v#{version}/minishelf-#{version}-macos-aarch64.tar.gz"
+    sha256 "__SHA256_MACOS_ARM64__"
   end
 
   on_linux do
@@ -19,6 +14,10 @@ class Minishelf < Formula
   end
 
   def install
+    if OS.mac? && Hardware::CPU.intel?
+      odie "Intel macOS binary is not published yet. Please use Apple Silicon or build from source."
+    end
+
     bin.install "minishelf"
   end
 
