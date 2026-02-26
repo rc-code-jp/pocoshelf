@@ -204,6 +204,5 @@ jobs:
               --base main \
               --head "$branch" \
               --title "Update Homebrew formula for ${GITHUB_REF_NAME}" \
-              --body "Automated Formula update for ${GITHUB_REF_NAME}." \
-              --label release
+              --body "Automated Formula update for ${GITHUB_REF_NAME}."
           fi
