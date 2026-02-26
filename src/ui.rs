@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::{App, TREE_RATIO_PERCENT};
@@ -64,15 +64,17 @@ fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
         block = block.border_style(Style::default().fg(Color::Cyan));
     }
     let tree = Paragraph::new(lines).block(block);
+    frame.render_widget(Clear, area);
     frame.render_widget(tree, area);
 }
 
 fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let height = area.height.saturating_sub(2) as usize;
+    let inner_width = area.width.saturating_sub(2) as usize;
     let start = app.preview.scroll.min(app.preview.lines.len().saturating_sub(1));
     let end = (start + height).min(app.preview.lines.len());
 
-    let lines = app.preview.lines[start..end]
+    let mut lines: Vec<Line<'_>> = app.preview.lines[start..end]
         .iter()
         .map(|line| {
             let style = if app.preview.is_diff_view() {
@@ -80,16 +82,23 @@ fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
             } else {
                 Style::default()
             };
-            Line::from(Span::styled(line.as_str(), style))
+            let sanitized = line.replace('\t', "    ");
+            let padded = format!("{:<width$}", sanitized, width = inner_width);
+            Line::from(Span::styled(padded, style))
         })
-        .collect::<Vec<_>>();
+        .collect();
+
+    let blank = " ".repeat(inner_width);
+    while lines.len() < height {
+        lines.push(Line::from(Span::raw(blank.clone())));
+    }
 
     let mut block = Block::default().title(app.preview_title()).borders(Borders::ALL);
     if app.is_preview_focused() {
         block = block.border_style(Style::default().fg(Color::Cyan));
     }
     let preview = Paragraph::new(lines).block(block);
-
+    frame.render_widget(Clear, area);
     frame.render_widget(preview, area);
 }
 
