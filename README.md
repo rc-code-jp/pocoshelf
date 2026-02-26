@@ -7,6 +7,10 @@
 
 ---
 
+<img width="1512" height="879" alt="minishelf.png" src="https://github.com/user-attachments/assets/e4cf38c2-cd0d-454a-844e-3599499de2ae" />
+
+---
+
 ## できること
 
 - 起動ディレクトリをルートに固定したファイルツリー表示
