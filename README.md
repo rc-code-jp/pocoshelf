@@ -119,7 +119,11 @@ git push origin v0.1.0
    - `minishelf-<version>-linux-x86_64.tar.gz`
    - `minishelf-<version>-macos-aarch64.tar.gz`
    - `checksums.txt`
-4. 同ワークフローで Homebrew formula も更新
+4. 同ワークフローで Homebrew formula 更新用の PR も自動作成
+
+> セキュリティメモ:
+> - リリースワークフローは最小権限（job 単位）で実行されます。
+> - `Formula/minishelf.rb` の更新は `main` へ直接 push せず、PR 経由でレビューして反映します。
 
 ### Homebrew formula テンプレート
 

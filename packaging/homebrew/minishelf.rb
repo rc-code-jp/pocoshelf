@@ -1,4 +1,6 @@
 class Minishelf < Formula
+  # This template is consumed by maintainers; Formula/minishelf.rb is updated
+  # through a release automation PR and reviewed before merge.
   desc "Rust TUI file explorer with git-aware coloring"
   homepage "https://github.com/YOUR_GITHUB_USER/minishelf"
   version "__VERSION__"
