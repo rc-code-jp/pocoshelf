@@ -75,22 +75,30 @@ fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
 fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let height = area.height.saturating_sub(2) as usize;
     let inner_width = area.width.saturating_sub(2) as usize;
+    let line_no_width = app.preview.lines.len().max(1).to_string().len().max(3);
     let start = app
         .preview
         .scroll
         .min(app.preview.lines.len().saturating_sub(1));
     let end = (start + height).min(app.preview.lines.len());
 
-    let mut in_markdown_code = false;
     let mut lines: Vec<Line<'_>> = Vec::with_capacity(end.saturating_sub(start));
-    for line in &app.preview.lines[start..end] {
+    for (offset, line) in app.preview.lines[start..end].iter().enumerate() {
+        let absolute_index = start + offset;
         let style = match app.preview.render_mode {
-            PreviewRenderMode::Diff => style_for_diff_line(line),
-            PreviewRenderMode::Markdown => style_for_markdown_line(line, &mut in_markdown_code),
+            PreviewRenderMode::Diff => {
+                style_for_diff_line(app.preview.is_changed_line(absolute_index))
+            }
             PreviewRenderMode::Raw => Style::default(),
         };
         let sanitized = line.replace('\t', "    ");
-        let padded = format!("{:<width$}", sanitized, width = inner_width);
+        let numbered = format!(
+            "{:>line_no_width$} | {}",
+            absolute_index + 1,
+            sanitized,
+            line_no_width = line_no_width
+        );
+        let padded = format!("{:<width$}", numbered, width = inner_width);
         lines.push(Line::from(Span::styled(padded, style)));
     }
 
@@ -112,7 +120,7 @@ fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let status = format!(
-        "{} | selected: {} | focus: {} | keys: j/k h/l enter/esc arrows r v y q",
+        "{} | selected: {} | focus: {} | keys: j/k h/l enter/esc arrows r v n/N y q",
         app.status_message,
         app.tree.selected_path().display(),
         if app.is_tree_focused() {
@@ -126,79 +134,15 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-fn style_for_diff_line(line: &str) -> Style {
-    if line.starts_with('+') && !line.starts_with("+++") {
-        return Style::default().fg(Color::Green).bg(Color::Rgb(20, 45, 20));
-    }
-
-    if line.starts_with('-') && !line.starts_with("---") {
-        return Style::default().fg(Color::Red).bg(Color::Rgb(50, 20, 20));
-    }
-
-    if line.starts_with(' ') {
+fn style_for_diff_line(changed: bool) -> Style {
+    if !changed {
         return Style::default().fg(Color::Gray).bg(Color::Rgb(30, 30, 30));
     }
 
     Style::default()
-}
-
-fn style_for_markdown_line(line: &str, in_code_block: &mut bool) -> Style {
-    let trimmed = line.trim_start();
-
-    if trimmed.starts_with("```") {
-        *in_code_block = !*in_code_block;
-        return Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::BOLD);
-    }
-
-    if *in_code_block {
-        return Style::default()
-            .fg(Color::Yellow)
-            .bg(Color::Rgb(30, 30, 30));
-    }
-
-    if trimmed.starts_with("# ") {
-        return Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD);
-    }
-
-    if trimmed.starts_with("## ") {
-        return Style::default()
-            .fg(Color::LightCyan)
-            .add_modifier(Modifier::BOLD);
-    }
-
-    if trimmed.starts_with("### ") {
-        return Style::default()
-            .fg(Color::LightBlue)
-            .add_modifier(Modifier::BOLD);
-    }
-
-    if trimmed.starts_with(">") {
-        return Style::default()
-            .fg(Color::Gray)
-            .add_modifier(Modifier::ITALIC);
-    }
-
-    if is_markdown_list_item(trimmed) {
-        return Style::default().fg(Color::Green);
-    }
-
-    Style::default()
-}
-
-fn is_markdown_list_item(line: &str) -> bool {
-    if line.starts_with("- ") || line.starts_with("* ") || line.starts_with("+ ") {
-        return true;
-    }
-
-    let Some((prefix, rest)) = line.split_once('.') else {
-        return false;
-    };
-
-    !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) && rest.starts_with(' ')
+        .fg(Color::Yellow)
+        .bg(Color::Rgb(55, 45, 10))
+        .add_modifier(Modifier::BOLD)
 }
 
 fn style_for_git(state: GitState) -> Style {

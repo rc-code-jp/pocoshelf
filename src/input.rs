@@ -13,6 +13,8 @@ pub fn map_event(key: KeyEvent) -> Option<Command> {
         (KeyCode::Char('h'), _) | (KeyCode::Left, _) | (KeyCode::Esc, _) => Some(Command::Collapse),
         (KeyCode::Char('r'), _) => Some(Command::RefreshGit),
         (KeyCode::Char('v'), _) => Some(Command::TogglePreviewMode),
+        (KeyCode::Char('n'), _) => Some(Command::NextChange),
+        (KeyCode::Char('N'), _) => Some(Command::PrevChange),
         (KeyCode::Char('y'), _) => Some(Command::CopyRelativePath),
         (KeyCode::Char('u'), KeyModifiers::CONTROL) | (KeyCode::PageUp, _) => {
             Some(Command::PreviewUp)

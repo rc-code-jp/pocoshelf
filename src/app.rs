@@ -47,6 +47,8 @@ pub enum Command {
     PreviewDown,
     RefreshGit,
     TogglePreviewMode,
+    NextChange,
+    PrevChange,
     CopyRelativePath,
     Quit,
 }
@@ -120,6 +122,8 @@ impl App {
             Command::PreviewDown => self.preview.scroll_down(1),
             Command::RefreshGit => self.request_git_refresh(true),
             Command::TogglePreviewMode => self.toggle_preview_mode(),
+            Command::NextChange => self.jump_change(true),
+            Command::PrevChange => self.jump_change(false),
             Command::CopyRelativePath => self.copy_relative_path(),
             Command::Quit => self.should_quit = true,
         }
@@ -198,6 +202,18 @@ impl App {
         self.preferred_preview_mode = Some(next_mode);
         self.sync_preview();
         self.set_temporary_status(format!("preview mode: {}", self.preview.mode_label()));
+    }
+
+    fn jump_change(&mut self, next: bool) {
+        let moved = if next {
+            self.preview.jump_to_next_change()
+        } else {
+            self.preview.jump_to_prev_change()
+        };
+
+        if !moved {
+            self.set_temporary_status("no change marker in current view");
+        }
     }
 
     fn copy_relative_path(&mut self) {
@@ -297,26 +313,23 @@ mod tests {
     }
 
     #[test]
-    fn toggle_preview_mode_cycles_markdown_raw_diff() {
+    fn toggle_preview_mode_cycles_raw_diff() {
         let tmp = tempdir().expect("tmpdir should exist");
         let repo = Repository::init(tmp.path()).expect("git init should succeed");
-        let md = tmp.path().join("README.md");
-        fs::write(&md, "# Title\n").expect("write should succeed");
+        let file = tmp.path().join("file.txt");
+        fs::write(&file, "line1\n").expect("write should succeed");
         commit_all(&repo, "initial");
-        fs::write(&md, "# Title\n\nupdated\n").expect("write should succeed");
+        fs::write(&file, "line1\nline2\n").expect("write should succeed");
 
         let mut app = App::new(tmp.path().to_path_buf()).expect("app should build");
-        select_by_file_name(&mut app, "README.md");
-        assert_eq!(app.preview.render_mode, PreviewRenderMode::Markdown);
+        select_by_file_name(&mut app, "file.txt");
+        assert_eq!(app.preview.render_mode, PreviewRenderMode::Diff);
 
         app.handle_command(Command::TogglePreviewMode);
         assert_eq!(app.preview.render_mode, PreviewRenderMode::Raw);
 
         app.handle_command(Command::TogglePreviewMode);
         assert_eq!(app.preview.render_mode, PreviewRenderMode::Diff);
-
-        app.handle_command(Command::TogglePreviewMode);
-        assert_eq!(app.preview.render_mode, PreviewRenderMode::Markdown);
     }
 
     fn select_by_file_name(app: &mut App, file_name: &str) {

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use git2::{DiffFlags, DiffFormat, DiffOptions, Repository};
@@ -12,7 +13,6 @@ pub enum PreviewKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreviewRenderMode {
-    Markdown,
     Raw,
     Diff,
 }
@@ -20,7 +20,6 @@ pub enum PreviewRenderMode {
 impl PreviewRenderMode {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Markdown => "markdown",
             Self::Raw => "raw",
             Self::Diff => "diff",
         }
@@ -34,6 +33,7 @@ pub struct PreviewState {
     pub lines: Vec<String>,
     pub scroll: usize,
     available_modes: Vec<PreviewRenderMode>,
+    changed_lines: Vec<usize>,
 }
 
 impl PreviewState {
@@ -51,21 +51,14 @@ impl PreviewState {
             Err(msg) => return Self::message(msg),
         };
 
-        let is_markdown = is_markdown_file(path);
-        let diff_lines = collect_diff_lines(startup_root, path);
+        let diff_view = collect_diff_view(startup_root, path, raw_lines.len());
 
-        let mut available_modes = Vec::with_capacity(3);
-        if is_markdown {
-            available_modes.push(PreviewRenderMode::Markdown);
-        }
-        available_modes.push(PreviewRenderMode::Raw);
-        if diff_lines.is_some() {
+        let mut available_modes = vec![PreviewRenderMode::Raw];
+        if diff_view.is_some() {
             available_modes.push(PreviewRenderMode::Diff);
         }
 
-        let default_mode = if is_markdown {
-            PreviewRenderMode::Markdown
-        } else if diff_lines.is_some() {
+        let default_mode = if diff_view.is_some() {
             PreviewRenderMode::Diff
         } else {
             PreviewRenderMode::Raw
@@ -75,9 +68,15 @@ impl PreviewState {
             .filter(|mode| available_modes.contains(mode))
             .unwrap_or(default_mode);
 
+        let changed_lines = diff_view
+            .as_ref()
+            .map(|view| view.changed_lines.clone())
+            .unwrap_or_default();
+
         let lines = match render_mode {
-            PreviewRenderMode::Diff => diff_lines.unwrap_or_default(),
-            PreviewRenderMode::Raw | PreviewRenderMode::Markdown => raw_lines,
+            // Diff mode shows the full file and highlights changed lines.
+            PreviewRenderMode::Diff => raw_lines.clone(),
+            PreviewRenderMode::Raw => raw_lines,
         };
 
         Self {
@@ -86,6 +85,7 @@ impl PreviewState {
             lines,
             scroll: 0,
             available_modes,
+            changed_lines,
         }
     }
 
@@ -96,6 +96,7 @@ impl PreviewState {
             lines: vec![msg.into()],
             scroll: 0,
             available_modes: vec![PreviewRenderMode::Raw],
+            changed_lines: Vec::new(),
         }
     }
 
@@ -105,6 +106,41 @@ impl PreviewState {
 
     pub fn scroll_down(&mut self, amount: usize) {
         self.scroll = self.scroll.saturating_add(amount);
+    }
+
+    pub fn jump_to_next_change(&mut self) -> bool {
+        if self.render_mode != PreviewRenderMode::Diff || self.changed_lines.is_empty() {
+            return false;
+        }
+
+        let next = self
+            .changed_lines
+            .iter()
+            .copied()
+            .find(|line| *line > self.scroll)
+            .unwrap_or(self.changed_lines[0]);
+        self.scroll = next;
+        true
+    }
+
+    pub fn jump_to_prev_change(&mut self) -> bool {
+        if self.render_mode != PreviewRenderMode::Diff || self.changed_lines.is_empty() {
+            return false;
+        }
+
+        let prev = self
+            .changed_lines
+            .iter()
+            .copied()
+            .rev()
+            .find(|line| *line < self.scroll)
+            .unwrap_or(*self.changed_lines.last().expect("non-empty"));
+        self.scroll = prev;
+        true
+    }
+
+    pub fn is_changed_line(&self, line_index: usize) -> bool {
+        self.changed_lines.binary_search(&line_index).is_ok()
     }
 
     pub fn next_render_mode(&self) -> Option<PreviewRenderMode> {
@@ -123,6 +159,11 @@ impl PreviewState {
     pub fn mode_label(&self) -> &'static str {
         self.render_mode.label()
     }
+}
+
+#[derive(Debug, Clone)]
+struct DiffView {
+    changed_lines: Vec<usize>,
 }
 
 fn load_raw_file(path: &Path) -> Result<Vec<String>, String> {
@@ -144,7 +185,7 @@ fn load_raw_file(path: &Path) -> Result<Vec<String>, String> {
     Ok(text.lines().map(std::string::ToString::to_string).collect())
 }
 
-fn collect_diff_lines(startup_root: &Path, path: &Path) -> Option<Vec<String>> {
+fn collect_diff_view(startup_root: &Path, path: &Path, line_count: usize) -> Option<DiffView> {
     let repo = Repository::discover(startup_root).ok()?;
     let workdir = repo.workdir()?;
     let relative_path = relative_to_workdir(workdir, path)?;
@@ -161,34 +202,73 @@ fn collect_diff_lines(startup_root: &Path, path: &Path) -> Option<Vec<String>> {
         .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut options))
         .ok()?;
 
+    let mut has_delta = false;
     for delta in diff.deltas() {
+        has_delta = true;
         if delta.flags().contains(DiffFlags::BINARY) {
             return None;
         }
     }
 
+    if !has_delta {
+        return None;
+    }
+
     let mut non_utf8 = false;
-    let mut lines = Vec::new();
-    let print_result = diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
-        let content = line.content();
-        let text = match std::str::from_utf8(content) {
-            Ok(t) => t.trim_end_matches('\n').trim_end_matches('\r').to_string(),
-            Err(_) => {
+    let print_ok = diff
+        .print(DiffFormat::Patch, |_delta, _hunk, line| {
+            if std::str::from_utf8(line.content()).is_err() {
                 non_utf8 = true;
                 return false;
             }
-        };
+            true
+        })
+        .is_ok();
 
-        if let Some(renderable) = to_renderable_diff_line(line.origin(), &text) {
-            lines.push(renderable);
-        }
+    if !print_ok || non_utf8 {
+        return None;
+    }
+
+    let mut changed = BTreeSet::new();
+    let mut file_cb = |_delta: git2::DiffDelta<'_>, _progress: f32| true;
+    let mut line_cb = |_delta: git2::DiffDelta<'_>,
+                       _hunk: Option<git2::DiffHunk<'_>>,
+                       line: git2::DiffLine<'_>| {
+        mark_changed_line(&mut changed, line, line_count);
         true
-    });
+    };
 
-    if print_result.is_err() || non_utf8 || lines.is_empty() {
-        None
-    } else {
-        Some(lines)
+    if diff
+        .foreach(&mut file_cb, None, None, Some(&mut line_cb))
+        .is_err()
+    {
+        return None;
+    }
+
+    Some(DiffView {
+        changed_lines: changed.into_iter().collect(),
+    })
+}
+
+fn mark_changed_line(changed: &mut BTreeSet<usize>, line: git2::DiffLine<'_>, line_count: usize) {
+    if line_count == 0 {
+        return;
+    }
+
+    match line.origin() {
+        '+' | '>' => {
+            if let Some(new_lineno) = line.new_lineno() {
+                let index = usize::min(new_lineno.saturating_sub(1) as usize, line_count - 1);
+                changed.insert(index);
+            }
+        }
+        '-' | '<' => {
+            if let Some(old_lineno) = line.old_lineno() {
+                let index = usize::min(old_lineno.saturating_sub(1) as usize, line_count - 1);
+                changed.insert(index);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -210,27 +290,6 @@ fn relative_to_workdir(workdir: &Path, path: &Path) -> Option<PathBuf> {
     let file_name = path.file_name()?;
     let rel_parent = canonical_parent.strip_prefix(&canonical_workdir).ok()?;
     Some(rel_parent.join(file_name))
-}
-
-fn is_markdown_file(path: &Path) -> bool {
-    let Some(ext) = path.extension() else {
-        return false;
-    };
-
-    matches!(
-        ext.to_string_lossy().to_ascii_lowercase().as_str(),
-        "md" | "markdown"
-    )
-}
-
-fn to_renderable_diff_line(origin: char, line: &str) -> Option<String> {
-    match origin {
-        '+' => Some(format!("+{line}")),
-        '-' => Some(format!("-{line}")),
-        ' ' => Some(format!(" {line}")),
-        '\\' => Some(format!("\\{line}")),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -263,17 +322,6 @@ mod tests {
     }
 
     #[test]
-    fn markdown_defaults_to_markdown_mode() {
-        let tmp = tempdir().expect("tmpdir should exist");
-        let path = tmp.path().join("README.md");
-        fs::write(&path, "# title\n").expect("write should succeed");
-
-        let preview = PreviewState::from_path(tmp.path(), &path, None);
-        assert_eq!(preview.render_mode, PreviewRenderMode::Markdown);
-        assert_eq!(preview.next_render_mode(), Some(PreviewRenderMode::Raw));
-    }
-
-    #[test]
     fn preview_no_diff_falls_back_to_raw_file() {
         let tmp = tempdir().expect("tmpdir should exist");
         let repo = Repository::init(tmp.path()).expect("git init should succeed");
@@ -288,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_modified_file_can_use_patch_mode() {
+    fn preview_modified_file_uses_full_file_in_diff_mode() {
         let tmp = tempdir().expect("tmpdir should exist");
         let repo = Repository::init(tmp.path()).expect("git init should succeed");
         let path = tmp.path().join("file.txt");
@@ -299,23 +347,27 @@ mod tests {
         let preview = PreviewState::from_path(tmp.path(), &path, Some(PreviewRenderMode::Diff));
         assert!(matches!(preview.kind, PreviewKind::Text));
         assert_eq!(preview.render_mode, PreviewRenderMode::Diff);
-        assert!(preview.lines.iter().any(|line| line.starts_with("+line2")));
-        assert!(!preview.lines.iter().any(|line| line.starts_with("@@")));
+        assert_eq!(
+            preview.lines,
+            vec!["line1".to_string(), "line2".to_string()]
+        );
+        assert!(preview.is_changed_line(1));
+        assert!(!preview.is_changed_line(0));
     }
 
     #[test]
-    fn markdown_cycles_markdown_raw_diff_when_available() {
+    fn raw_diff_cycle_when_diff_available() {
         let tmp = tempdir().expect("tmpdir should exist");
         let repo = Repository::init(tmp.path()).expect("git init should succeed");
-        let path = tmp.path().join("README.markdown");
-        fs::write(&path, "# Title\n").expect("write should succeed");
+        let path = tmp.path().join("file.txt");
+        fs::write(&path, "line1\n").expect("write should succeed");
         commit_all(&repo, "initial");
-        fs::write(&path, "# Title\n\nnew\n").expect("write should succeed");
+        fs::write(&path, "line1\nline2\n").expect("write should succeed");
 
-        let markdown_preview = PreviewState::from_path(tmp.path(), &path, None);
-        assert_eq!(markdown_preview.render_mode, PreviewRenderMode::Markdown);
+        let diff_preview = PreviewState::from_path(tmp.path(), &path, None);
+        assert_eq!(diff_preview.render_mode, PreviewRenderMode::Diff);
         assert_eq!(
-            markdown_preview.next_render_mode(),
+            diff_preview.next_render_mode(),
             Some(PreviewRenderMode::Raw)
         );
 
@@ -323,7 +375,7 @@ mod tests {
             tmp.path(),
             &path,
             Some(
-                markdown_preview
+                diff_preview
                     .next_render_mode()
                     .expect("raw mode should exist"),
             ),
@@ -333,21 +385,23 @@ mod tests {
             raw_preview.next_render_mode(),
             Some(PreviewRenderMode::Diff)
         );
+    }
 
-        let diff_preview = PreviewState::from_path(
-            tmp.path(),
-            &path,
-            Some(
-                raw_preview
-                    .next_render_mode()
-                    .expect("diff mode should exist"),
-            ),
-        );
-        assert_eq!(diff_preview.render_mode, PreviewRenderMode::Diff);
-        assert_eq!(
-            diff_preview.next_render_mode(),
-            Some(PreviewRenderMode::Markdown)
-        );
+    #[test]
+    fn jump_change_moves_scroll_in_diff_mode() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let repo = Repository::init(tmp.path()).expect("git init should succeed");
+        let path = tmp.path().join("file.txt");
+        fs::write(&path, "line1\nline2\nline3\n").expect("write should succeed");
+        commit_all(&repo, "initial");
+        fs::write(&path, "line1\nline2 changed\nline3\n").expect("write should succeed");
+
+        let mut preview = PreviewState::from_path(tmp.path(), &path, Some(PreviewRenderMode::Diff));
+        preview.scroll = 0;
+        assert!(preview.jump_to_next_change());
+        assert_eq!(preview.scroll, 1);
+        assert!(preview.jump_to_prev_change());
+        assert_eq!(preview.scroll, 1);
     }
 
     #[test]
