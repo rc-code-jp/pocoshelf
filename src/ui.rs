@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, TREE_RATIO_PERCENT};
+use crate::app::App;
 use crate::git_status::GitState;
 use crate::preview::PreviewRenderMode;
 
@@ -14,11 +14,13 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(frame.area());
 
+    let tree_ratio = if app.is_preview_focused() { 10 } else { 50 };
+
     let body = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(TREE_RATIO_PERCENT),
-            Constraint::Percentage(100 - TREE_RATIO_PERCENT),
+            Constraint::Percentage(tree_ratio),
+            Constraint::Percentage(100 - tree_ratio),
         ])
         .split(outer[0]);
 

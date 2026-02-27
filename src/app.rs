@@ -10,7 +10,6 @@ use crate::preview::{PreviewKind, PreviewRenderMode, PreviewState};
 use crate::tree::Tree;
 
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
-pub const TREE_RATIO_PERCENT: u16 = 20;
 const COPY_STATUS_DURATION: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
