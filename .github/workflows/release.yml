@@ -197,19 +197,3 @@ jobs:
 
           git switch -c "$branch"
           git push --force-with-lease origin "$branch"
-
-          existing_pr="$(gh pr list \
-            --state all \
-            --head "${{ github.repository_owner }}:$branch" \
-            --json number \
-            --jq '.[0].number // empty')"
-
-          if [[ -n "$existing_pr" ]]; then
-            echo "PR already exists for $branch (#$existing_pr)"
-          else
-            gh pr create \
-              --base main \
-              --head "${{ github.repository_owner }}:$branch" \
-              --title "Update Homebrew formula for ${GITHUB_REF_NAME}" \
-              --body "Automated Formula update for ${GITHUB_REF_NAME}."
-          fi
