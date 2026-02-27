@@ -107,6 +107,21 @@ minishelf .
 
 ---
 
+## 設定 (Configuration)
+
+`~/.config/minishelf/config.toml` (OSの標準的な設定ディレクトリ、または環境変数 `XDG_CONFIG_HOME` に準拠) に設定ファイルを作成することで、UI の動作をカスタマイズできます。
+ファイルが存在しない場合はデフォルトの比率が使用されます。
+
+```toml
+[layout]
+# 通常時の上部ツリーパネルの割合 (%)
+tree_ratio_normal = 50
+# プレビューパネルにフォーカスが当たった時の上部ツリーパネルの割合 (%)
+tree_ratio_preview_focused = 10
+```
+
+---
+
 ## よくある使い方
 
 - リポジトリの「どこが変わったか」を見たい

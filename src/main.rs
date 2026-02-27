@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod git_status;
 mod input;
 mod preview;

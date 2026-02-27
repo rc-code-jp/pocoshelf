@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
 
+use crate::config::Config;
 use crate::git_status::{GitSnapshot, GitState};
 use crate::preview::{PreviewKind, PreviewRenderMode, PreviewState};
 use crate::tree::Tree;
@@ -19,6 +20,7 @@ pub enum FocusPane {
 }
 
 pub struct App {
+    pub config: Config,
     pub startup_root: PathBuf,
     pub tree: Tree,
     pub preview: PreviewState,
@@ -56,6 +58,7 @@ pub enum Command {
 
 impl App {
     pub fn new(startup_root: PathBuf) -> anyhow::Result<Self> {
+        let config = Config::load();
         let tree = Tree::new(startup_root.clone())?;
 
         let git = GitSnapshot::collect(&startup_root);
@@ -63,6 +66,7 @@ impl App {
         let (git_refresh_tx, git_refresh_rx) = mpsc::channel();
 
         Ok(Self {
+            config,
             startup_root,
             tree,
             preview,

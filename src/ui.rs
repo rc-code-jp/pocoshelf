@@ -14,7 +14,11 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(frame.area());
 
-    let tree_ratio = if app.is_preview_focused() { 10 } else { 50 };
+    let tree_ratio = if app.is_preview_focused() {
+        app.config.layout.tree_ratio_preview_focused
+    } else {
+        app.config.layout.tree_ratio_normal
+    };
 
     let body = Layout::default()
         .direction(Direction::Vertical)
