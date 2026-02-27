@@ -133,20 +133,25 @@ tree_ratio_preview_focused = 10
 
 ## メンテナー向け: リリース手順
 
-1. 必要に応じて `Cargo.toml` のバージョンを更新
-2. タグを作成して push
+`scripts/release.sh` で事前チェックからタグ push までを実行します。
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+./scripts/release.sh 0.1.15
 ```
 
-3. GitHub Actions がリリース成果物を作成
+このスクリプトは以下を行います。
+
+1. `main` ブランチであることを確認
+2. ワークツリーが clean であることを確認
+3. `cargo fmt --check` / `cargo clippy --all-targets --all-features -D warnings` / `cargo test` を実行
+4. `Cargo.toml` の `version` を更新し、`chore(release): v<version>` で commit
+5. `v<version>` タグを作成して `origin` に push
+
+その後、GitHub Actions がリリース成果物を作成します。
    - `minishelf-<version>-linux-x86_64.tar.gz`
    - `minishelf-<version>-macos-aarch64.tar.gz`
    - `checksums.txt`
-4. 同ワークフローで Homebrew formula 更新用のブランチ（`chore/formula-<version>`）が生成されます。
-5. GitHub Actions の実行ログ（Summary）に出力されるリンクから手動でプルリクエストを作成し、マージしてください。
+同ワークフローで Homebrew formula 更新用のブランチ（`chore/formula-<version>`）が生成されるため、GitHub Actions の実行ログ（Summary）に出力されるリンクから手動でプルリクエストを作成し、マージしてください。
 
 > セキュリティメモ:
 > - リリースワークフローは最小権限（job 単位）で実行されます。
