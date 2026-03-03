@@ -173,7 +173,6 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("General"),
         Line::from("  r                      Refresh git status"),
         Line::from("  y                      Copy @-relative path"),
-        Line::from("  o                      Open file in TextEdit"),
         Line::from("  q                      Quit"),
         Line::from("  ? / F1                 Toggle this help"),
         Line::from(""),

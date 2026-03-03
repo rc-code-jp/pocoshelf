@@ -40,7 +40,6 @@ pub struct App {
     git_refresh_in_flight: bool,
     pending_manual_refresh: bool,
     preferred_preview_mode: Option<PreviewRenderMode>,
-    pub pending_open_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -57,7 +56,6 @@ pub enum Command {
     NextChange,
     PrevChange,
     CopyRelativePath,
-    OpenInEditor,
     Quit,
 }
 
@@ -106,7 +104,6 @@ impl App {
             git_refresh_in_flight: false,
             pending_manual_refresh: false,
             preferred_preview_mode: None,
-            pending_open_path: None,
         })
     }
 
@@ -168,7 +165,6 @@ impl App {
             Command::NextChange => self.jump_change(true),
             Command::PrevChange => self.jump_change(false),
             Command::CopyRelativePath => self.copy_relative_path(),
-            Command::OpenInEditor => self.open_in_editor(),
             Command::Quit => self.should_quit = true,
         }
     }
@@ -271,15 +267,6 @@ impl App {
         if !moved {
             self.set_temporary_status("no change marker in current view");
         }
-    }
-
-    fn open_in_editor(&mut self) {
-        let path = self.tree.selected_path().to_path_buf();
-        if path.is_dir() {
-            self.set_temporary_status("cannot open directory in editor");
-            return;
-        }
-        self.pending_open_path = Some(path);
     }
 
     fn copy_relative_path(&mut self) {
