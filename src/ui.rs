@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::app::App;
@@ -30,7 +30,7 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
 
     render_tree(frame, app, body[0]);
     render_preview(frame, app, body[1]);
-    render_status(frame, outer[1]);
+    render_status(frame, app, outer[1]);
     if app.show_help {
         render_help(frame, frame.area());
     }
@@ -127,9 +127,10 @@ fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(preview, area);
 }
 
-fn render_status(frame: &mut Frame<'_>, area: Rect) {
+fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let status_text = format!("{} | ?: help", app.status_message);
     let line = Line::from(Span::styled(
-        "?: help",
+        status_text,
         Style::default().fg(Color::DarkGray),
     ));
     frame.render_widget(Paragraph::new(line), area);
@@ -161,23 +162,24 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
     let help_lines = vec![
         Line::from("Navigation"),
         Line::from("  j / k, Down / Up      Move selection or preview scroll"),
-        Line::from("  h / Left / Esc         Collapse dir or move focus back to tree"),
+        Line::from("  h / Left               Collapse dir or move focus back to tree"),
         Line::from("  l / Right / Enter      Expand dir or open file preview"),
         Line::from(""),
         Line::from("Preview"),
         Line::from("  Ctrl+u / PageUp        Scroll preview up"),
         Line::from("  Ctrl+d / PageDown      Scroll preview down"),
-        Line::from("  v                      Toggle preview mode (raw <-> diff)"),
+        Line::from("  p                      Toggle preview mode (raw <-> diff)"),
         Line::from("  n / N                  Jump to next / previous change in diff mode"),
         Line::from(""),
         Line::from("General"),
         Line::from("  r                      Refresh git status"),
-        Line::from("  y                      Copy @-relative path"),
+        Line::from("  c                      Copy @-relative path"),
+        Line::from("  v                      Open selected file in vi"),
         Line::from("  o                      Open selected location in Finder"),
-        Line::from("  q                      Quit"),
+        Line::from("  q / Esc                Quit"),
         Line::from("  ? / F1                 Toggle this help"),
         Line::from(""),
-        Line::from("Close help: Esc, h, or ?"),
+        Line::from("Close help: h or ?"),
     ];
 
     let block = Block::default()
@@ -185,7 +187,12 @@ fn render_help(frame: &mut Frame<'_>, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     frame.render_widget(Clear, popup);
-    frame.render_widget(Paragraph::new(help_lines).block(block), popup);
+    frame.render_widget(
+        Paragraph::new(help_lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        popup,
+    );
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

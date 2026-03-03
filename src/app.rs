@@ -57,8 +57,14 @@ pub enum Command {
     NextChange,
     PrevChange,
     CopyRelativePath,
+    OpenInVi,
     OpenInFinder,
     Quit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppEffect {
+    OpenInVi(PathBuf),
 }
 
 impl App {
@@ -109,7 +115,7 @@ impl App {
         })
     }
 
-    pub fn handle_command(&mut self, command: Command) {
+    pub fn handle_command(&mut self, command: Command) -> Option<AppEffect> {
         self.poll_background_tasks();
 
         if self.show_help {
@@ -120,7 +126,7 @@ impl App {
                 Command::Quit => self.should_quit = true,
                 _ => {}
             }
-            return;
+            return None;
         }
 
         match command {
@@ -167,9 +173,12 @@ impl App {
             Command::NextChange => self.jump_change(true),
             Command::PrevChange => self.jump_change(false),
             Command::CopyRelativePath => self.copy_relative_path(),
+            Command::OpenInVi => return self.open_in_vi(),
             Command::OpenInFinder => self.open_in_finder(),
             Command::Quit => self.should_quit = true,
         }
+
+        None
     }
 
     pub fn periodic_refresh(&mut self) {
@@ -307,6 +316,15 @@ impl App {
         }
     }
 
+    fn open_in_vi(&mut self) -> Option<AppEffect> {
+        if self.tree.selected_is_dir() {
+            self.set_temporary_status("directory selected; vi skipped");
+            return None;
+        }
+
+        Some(AppEffect::OpenInVi(self.tree.selected_path().to_path_buf()))
+    }
+
     pub fn selected_git_state(&self, path: &Path, is_dir: bool) -> GitState {
         self.git.state_for(path, is_dir)
     }
@@ -329,6 +347,10 @@ impl App {
     fn set_temporary_status(&mut self, msg: impl Into<String>) {
         self.status_message = msg.into();
         self.status_expires_at = Some(Instant::now() + COPY_STATUS_DURATION);
+    }
+
+    pub fn set_external_status(&mut self, msg: impl Into<String>) {
+        self.set_temporary_status(msg);
     }
 }
 
@@ -385,7 +407,7 @@ mod tests {
 
     use crate::preview::PreviewRenderMode;
 
-    use super::{format_relative_with_at, resolve_directory_to_open};
+    use super::{format_relative_with_at, resolve_directory_to_open, AppEffect};
     use super::{App, Command};
 
     #[test]
@@ -423,10 +445,10 @@ mod tests {
         select_by_file_name(&mut app, "file.txt");
         assert_eq!(app.preview.render_mode, PreviewRenderMode::Diff);
 
-        app.handle_command(Command::TogglePreviewMode);
+        let _ = app.handle_command(Command::TogglePreviewMode);
         assert_eq!(app.preview.render_mode, PreviewRenderMode::Raw);
 
-        app.handle_command(Command::TogglePreviewMode);
+        let _ = app.handle_command(Command::TogglePreviewMode);
         assert_eq!(app.preview.render_mode, PreviewRenderMode::Diff);
     }
 
@@ -436,14 +458,42 @@ mod tests {
         let mut app = App::new(tmp.path().to_path_buf()).expect("app should build");
         let before = app.tree.selected_path().to_path_buf();
 
-        app.handle_command(Command::ToggleHelp);
+        let _ = app.handle_command(Command::ToggleHelp);
         assert!(app.show_help);
 
-        app.handle_command(Command::MoveDown);
+        let _ = app.handle_command(Command::MoveDown);
         assert_eq!(app.tree.selected_path(), before.as_path());
 
-        app.handle_command(Command::ToggleHelp);
+        let _ = app.handle_command(Command::ToggleHelp);
         assert!(!app.show_help);
+    }
+
+    #[test]
+    fn open_in_vi_returns_effect_for_file() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("note.txt"), "hello").expect("write should succeed");
+
+        let mut app = App::new(tmp.path().to_path_buf()).expect("app should build");
+        select_by_file_name(&mut app, "note.txt");
+
+        let effect = app.handle_command(Command::OpenInVi);
+        assert_eq!(
+            effect,
+            Some(AppEffect::OpenInVi(tmp.path().join("note.txt")))
+        );
+    }
+
+    #[test]
+    fn open_in_vi_skips_directory_selection() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::create_dir_all(tmp.path().join("sub")).expect("create dir should succeed");
+
+        let mut app = App::new(tmp.path().to_path_buf()).expect("app should build");
+        select_by_file_name(&mut app, "sub");
+
+        let effect = app.handle_command(Command::OpenInVi);
+        assert_eq!(effect, None);
+        assert_eq!(app.status_message, "directory selected; vi skipped");
     }
 
     #[test]
@@ -471,7 +521,7 @@ mod tests {
             {
                 return;
             }
-            app.handle_command(Command::MoveDown);
+            let _ = app.handle_command(Command::MoveDown);
         }
 
         panic!("file should exist in tree: {file_name}");

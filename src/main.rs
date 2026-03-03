@@ -7,7 +7,9 @@ mod tree;
 mod ui;
 
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -20,7 +22,7 @@ use crossterm::terminal::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use crate::app::{App, REFRESH_INTERVAL};
+use crate::app::{App, AppEffect, REFRESH_INTERVAL};
 use crate::input::map_event;
 
 #[derive(Parser, Debug)]
@@ -64,7 +66,21 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, startup_root: Path
         if event::poll(timeout)? {
             if let Event::Key(key_event) = event::read()? {
                 if let Some(command) = map_event(key_event) {
-                    app.handle_command(command);
+                    if let Some(effect) = app.handle_command(command) {
+                        match effect {
+                            AppEffect::OpenInVi(path) => match open_in_vi(terminal, &path) {
+                                Ok(()) => {
+                                    app.set_external_status(format!(
+                                        "opened in vi: {}",
+                                        path.display()
+                                    ));
+                                }
+                                Err(err) => {
+                                    app.set_external_status(format!("open failed: {err}"));
+                                }
+                            },
+                        }
+                    }
                 }
             }
         }
@@ -76,6 +92,23 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, startup_root: Path
     }
 
     Ok(())
+}
+
+fn open_in_vi(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, path: &Path) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+    let vi_result = ProcessCommand::new("vi").arg(path).status();
+
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    enable_raw_mode()?;
+    terminal.clear()?;
+
+    match vi_result {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => anyhow::bail!("vi exited with status: {status}"),
+        Err(err) => anyhow::bail!("failed to launch vi: {err}"),
+    }
 }
 
 fn resolve_startup_root(path: Option<PathBuf>) -> Result<PathBuf> {
