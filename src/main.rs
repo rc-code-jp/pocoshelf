@@ -7,7 +7,8 @@ mod tree;
 mod ui;
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -69,10 +70,48 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, startup_root: Path
             }
         }
 
+        if let Some(path) = app.pending_open_path.take() {
+            open_in_editor(terminal, &path, &app.config.editor.command)?;
+        }
+
         if last_tick.elapsed() >= REFRESH_INTERVAL {
             app.periodic_refresh();
             last_tick = Instant::now();
         }
+    }
+
+    Ok(())
+}
+
+fn open_in_editor(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    path: &Path,
+    command: &str,
+) -> Result<()> {
+    let mut tokens = command.split_whitespace();
+    let program = tokens
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("editor.command is empty"))?;
+    let args: Vec<&str> = tokens.collect();
+
+    disable_raw_mode()?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    let status = ProcessCommand::new(program).args(&args).arg(path).status();
+
+    enable_raw_mode()?;
+    execute!(io::stdout(), EnterAlternateScreen)?;
+    terminal.clear()?;
+
+    match status {
+        Ok(s) if !s.success() => {
+            // editor exited with non-zero; not fatal for the TUI
+        }
+        Err(err) => {
+            anyhow::bail!("failed to launch editor: {err}");
+        }
+        _ => {}
     }
 
     Ok(())

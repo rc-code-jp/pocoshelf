@@ -119,6 +119,11 @@ minishelf .
 tree_ratio_normal = 50
 # プレビューパネルにフォーカスが当たった時の上部ツリーパネルの割合 (%)
 tree_ratio_preview_focused = 10
+
+[editor]
+# `o` キーで開くエディタコマンド (デフォルト: macOS="open -a TextEdit" / Linux="xdg-open")
+# 例: "open -a TextEdit" / "open -a 'Visual Studio Code'" / "vim" / "nano"
+command = "open -a TextEdit"
 ```
 
 ---

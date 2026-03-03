@@ -17,6 +17,7 @@ pub fn map_event(key: KeyEvent) -> Option<Command> {
         (KeyCode::Char('n'), _) => Some(Command::NextChange),
         (KeyCode::Char('N'), _) => Some(Command::PrevChange),
         (KeyCode::Char('y'), _) => Some(Command::CopyRelativePath),
+        (KeyCode::Char('o'), _) => Some(Command::OpenInEditor),
         (KeyCode::Char('u'), KeyModifiers::CONTROL) | (KeyCode::PageUp, _) => {
             Some(Command::PreviewUp)
         }

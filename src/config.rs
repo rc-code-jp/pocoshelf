@@ -8,12 +8,29 @@ use serde::Deserialize;
 pub struct Config {
     #[serde(default)]
     pub layout: LayoutConfig,
+    #[serde(default)]
+    pub editor: EditorConfig,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct LayoutConfig {
     pub tree_ratio_normal: u16,
     pub tree_ratio_preview_focused: u16,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EditorConfig {
+    pub command: String,
+}
+
+impl Default for EditorConfig {
+    fn default() -> Self {
+        #[cfg(target_os = "macos")]
+        let command = String::from("open -a TextEdit");
+        #[cfg(not(target_os = "macos"))]
+        let command = String::from("xdg-open");
+        Self { command }
+    }
 }
 
 impl Default for LayoutConfig {
