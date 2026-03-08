@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -8,7 +9,7 @@ use arboard::Clipboard;
 use notify::{RecursiveMode, Watcher};
 
 use crate::config::Config;
-use crate::git_status::{GitSnapshot, GitState};
+use crate::git_status::{collect_ignored_paths, GitSnapshot, GitState};
 use crate::preview::{PreviewKind, PreviewRenderMode, PreviewState};
 use crate::tree::Tree;
 
@@ -28,6 +29,7 @@ pub struct App {
     pub preview: PreviewState,
     pub focus: FocusPane,
     pub git: GitSnapshot,
+    visible_ignored_paths: HashSet<PathBuf>,
     pub status_message: String,
     pub last_git_refresh: Instant,
     pub should_quit: bool,
@@ -75,6 +77,10 @@ impl App {
         let tree = Tree::new(startup_root.clone())?;
 
         let git = GitSnapshot::collect(&startup_root);
+        let visible_ignored_paths = collect_ignored_paths(
+            &startup_root,
+            tree.entries.iter().map(|entry| entry.path.as_path()),
+        );
         let preview = PreviewState::from_path(&startup_root, tree.selected_path(), None);
         let (git_refresh_tx, git_refresh_rx) = mpsc::channel();
         let (fs_refresh_tx, fs_refresh_rx) = mpsc::channel();
@@ -101,6 +107,7 @@ impl App {
             preview,
             focus: FocusPane::Tree,
             git,
+            visible_ignored_paths,
             status_message: String::from("ready"),
             last_git_refresh: Instant::now(),
             should_quit: false,
@@ -154,6 +161,7 @@ impl App {
                         if let Err(err) = self.tree.expand_selected() {
                             self.status_message = format!("expand failed: {err}");
                         }
+                        self.refresh_visible_ignored_paths();
                         self.sync_preview();
                     } else {
                         self.sync_preview();
@@ -166,6 +174,7 @@ impl App {
                     self.focus = FocusPane::Tree;
                 } else {
                     self.tree.collapse_selected();
+                    self.refresh_visible_ignored_paths();
                     self.sync_preview();
                 }
             }
@@ -210,6 +219,7 @@ impl App {
             if let Err(err) = self.tree.refresh() {
                 self.status_message = format!("tree refresh failed: {err}");
             } else {
+                self.refresh_visible_ignored_paths();
                 self.sync_preview();
                 self.request_git_refresh(false);
             }
@@ -267,6 +277,7 @@ impl App {
             return;
         }
 
+        self.refresh_visible_ignored_paths();
         self.sync_preview();
         self.request_git_refresh(false);
     }
@@ -347,7 +358,16 @@ impl App {
     }
 
     pub fn selected_git_state(&self, path: &Path, is_dir: bool) -> GitState {
-        self.git.state_for(path, is_dir)
+        let state = self.git.state_for(path, is_dir);
+        if state != GitState::Clean {
+            return state;
+        }
+
+        if self.visible_ignored_paths.contains(path) {
+            GitState::Ignored
+        } else {
+            GitState::Clean
+        }
     }
 
     pub fn preview_title(&self) -> String {
@@ -379,6 +399,13 @@ impl App {
             && self
                 .last_fs_event_at
                 .is_some_and(|at| at.elapsed() >= FS_REFRESH_DEBOUNCE)
+    }
+
+    fn refresh_visible_ignored_paths(&mut self) {
+        self.visible_ignored_paths = collect_ignored_paths(
+            &self.startup_root,
+            self.tree.entries.iter().map(|entry| entry.path.as_path()),
+        );
     }
 }
 
@@ -434,6 +461,7 @@ mod tests {
     use git2::{IndexAddOption, Repository, Signature};
     use tempfile::tempdir;
 
+    use crate::git_status::GitState;
     use crate::preview::PreviewRenderMode;
 
     use super::{
@@ -560,6 +588,50 @@ mod tests {
         app.last_fs_event_at = Some(Instant::now());
 
         assert!(!app.should_flush_fs_refresh());
+    }
+
+    #[test]
+    fn selected_git_state_marks_visible_ignored_entries() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path();
+        Repository::init(root).expect("git init should succeed");
+        fs::write(root.join(".gitignore"), "ignored-dir/\nignored.txt\n")
+            .expect("gitignore should write");
+        fs::create_dir_all(root.join("ignored-dir")).expect("ignored dir should create");
+        fs::write(root.join("ignored.txt"), "skip").expect("ignored file should write");
+
+        let app = App::new(root.to_path_buf()).expect("app should build");
+
+        let ignored_dir = root.join("ignored-dir");
+        let ignored_file = root.join("ignored.txt");
+        assert_eq!(
+            app.selected_git_state(&ignored_dir, true),
+            GitState::Ignored
+        );
+        assert_eq!(
+            app.selected_git_state(&ignored_file, false),
+            GitState::Ignored
+        );
+    }
+
+    #[test]
+    fn selected_git_state_refreshes_when_entering_directory() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path();
+        Repository::init(root).expect("git init should succeed");
+        fs::write(root.join(".gitignore"), "nested/ignored.log\n").expect("gitignore should write");
+        fs::create_dir_all(root.join("nested")).expect("nested dir should create");
+        fs::write(root.join("nested/ignored.log"), "skip").expect("ignored file should write");
+
+        let mut app = App::new(root.to_path_buf()).expect("app should build");
+        select_by_file_name(&mut app, "nested");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+
+        let ignored_file = root.join("nested/ignored.log");
+        assert_eq!(
+            app.selected_git_state(&ignored_file, false),
+            GitState::Ignored
+        );
     }
 
     fn select_by_file_name(app: &mut App, file_name: &str) {

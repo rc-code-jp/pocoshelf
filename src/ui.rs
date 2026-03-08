@@ -150,6 +150,7 @@ fn style_for_diff_line(changed: bool) -> Style {
 fn style_for_git(state: GitState) -> Style {
     match state {
         GitState::Clean => Style::default().fg(Color::White),
+        GitState::Ignored => Style::default().fg(Color::Rgb(136, 136, 136)),
         GitState::Untracked => Style::default().fg(Color::Blue),
         GitState::Added => Style::default().fg(Color::Green),
         GitState::Modified => Style::default().fg(Color::Yellow),
