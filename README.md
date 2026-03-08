@@ -35,7 +35,7 @@
 一般ユーザー向けの主導線です。Rust / Cargo は不要です。
 
 ```bash
-brew tap yourorg/tap
+brew tap rc-code-jp/tap
 brew install minishelf
 ```
 
@@ -48,7 +48,7 @@ brew upgrade minishelf
 1 行で入れる場合:
 
 ```bash
-brew install yourorg/tap/minishelf
+brew install rc-code-jp/tap/minishelf
 ```
 
 現在の配布ターゲット:
@@ -147,11 +147,36 @@ tree_ratio_preview_focused = 10
 
 ## メンテナー向け情報
 
-リリース手順は [`docs/release.md`](docs/release.md) を参照してください。
+### リリース手順
+
+1. `Cargo.toml` の `version` を次のリリース版に更新する
+2. `git commit` して `main` に push する
+3. リリースタグを push する
+
+```bash
+git tag v<version>
+git push origin v<version>
+```
+
+4. GitHub Actions の `release` workflow 完了後、Actions summary か GitHub Release の `checksums.txt` から次を確認する
+- `version`
+- `url`
+- `sha256`
+
+5. `rc-code-jp/homebrew-tap` の `Formula/minishelf.rb` を更新して push する
+
+```ruby
+version "<version>"
+sha256 "<checksums.txt の値>"
+```
+
+ユーザーはその後 `brew upgrade minishelf` で更新できます。
+
+詳細は [`docs/release.md`](docs/release.md) を参照してください。
 
 ### Homebrew formula テンプレート
 
-`packaging/homebrew/minishelf.rb` を `yourorg/homebrew-tap` の `Formula/minishelf.rb` にコピーし、以下プレースホルダーを置換してください。
+`packaging/homebrew/minishelf.rb` を `rc-code-jp/homebrew-tap` の `Formula/minishelf.rb` にコピーし、以下プレースホルダーを置換してください。
 
 - `__VERSION__`
 - `__SHA256_AARCH64_APPLE_DARWIN__`

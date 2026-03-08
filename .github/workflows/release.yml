@@ -198,7 +198,7 @@ jobs:
           {
             echo "## Homebrew tap manual update"
             echo
-            echo "Update \\`Formula/minishelf.rb\\` in \\`yourorg/homebrew-tap\\` with:"
+            echo "Update \\`Formula/minishelf.rb\\` in \\`rc-code-jp/homebrew-tap\\` with:"
             echo
             echo "- version: \\`${version}\\`"
             echo "- url: \\`${url}\\`"
