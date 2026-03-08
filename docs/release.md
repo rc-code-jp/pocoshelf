@@ -27,18 +27,18 @@
 
 `Cargo.toml` の `version` を次の版へ更新し、`main` に push します。
 
-例: `1.0.1` を出す場合
+例: `1.0.2` を出す場合
 
 ```bash
-git commit -am "Release 1.0.1"
+git commit -am "Release 1.0.2"
 git push origin main
 ```
 
 ### 2. リリースタグを作成して push
 
 ```bash
-git tag v1.0.1
-git push origin v1.0.1
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
 `push` されたタグで `.github/workflows/release.yml` が起動し、以下を公開します。
@@ -72,7 +72,7 @@ https://github.com/rc-code-jp/minishelf/releases/download/v<version>/minishelf-<
 `Formula/minishelf.rb` の最低限の更新箇所は次の 2 つです。
 
 ```ruby
-version "1.0.1"
+version "1.0.2"
 sha256 "<checksums.txt の値>"
 ```
 
@@ -82,7 +82,7 @@ sha256 "<checksums.txt の値>"
 
 ```bash
 git add Formula/minishelf.rb
-git commit -m "minishelf 1.0.1"
+git commit -m "minishelf 1.0.2"
 git push origin main
 ```
 
