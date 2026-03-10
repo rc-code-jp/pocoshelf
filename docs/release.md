@@ -20,7 +20,7 @@
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test`
 - `rc-code-jp/homebrew-tap` リポジトリが作成済みであること
-- `minishelf` リポジトリに共用 GitHub App `homebrew-sync` 用の `APP_ID` variable と `APP_PRIVATE_KEY` secret が設定済みであること
+- `minishelf` リポジトリに共用 GitHub App `homebrew-sync` 用の `APP_ID` secret と `APP_PRIVATE_KEY` secret が設定済みであること
 
 ## 最小構成でのリリース手順
 

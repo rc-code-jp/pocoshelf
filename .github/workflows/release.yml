@@ -233,9 +233,10 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ vars.APP_ID }}
+          app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           owner: rc-code-jp
+          repositories: homebrew-tap
 
       - name: Checkout tap repository
         uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
