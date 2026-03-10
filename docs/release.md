@@ -88,6 +88,8 @@ git push origin main
 
 これでユーザーは `brew upgrade minishelf` で更新できます。
 
+GitHub App を使って tap 更新を自動化する場合は [`docs/github-app-homebrew-tap.md`](github-app-homebrew-tap.md) を参照してください。
+
 ## 推奨構成: Developer ID 署名 + notarization
 
 最小構成のままでも配布はできますが、一般ユーザー向け体験を優先するなら署名 + notarization を推奨します。
