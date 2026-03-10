@@ -332,7 +332,7 @@ impl App {
 
     fn open_in_finder(&mut self) {
         let selected = self.tree.selected_path();
-        let target_dir = resolve_directory_to_open(selected, self.tree.selected_is_dir());
+        let target_dir = resolve_directory_to_open(selected);
 
         let mut command = finder_open_command(target_dir);
         match command.status() {
@@ -429,12 +429,8 @@ fn normalize_to_slashes(path: &Path) -> String {
         .join("/")
 }
 
-fn resolve_directory_to_open(selected: &Path, selected_is_dir: bool) -> &Path {
-    if selected_is_dir || selected.is_dir() {
-        selected
-    } else {
-        selected.parent().unwrap_or(selected)
-    }
+fn resolve_directory_to_open(selected: &Path) -> &Path {
+    selected.parent().unwrap_or(selected)
 }
 
 fn finder_open_command(path: &Path) -> ProcessCommand {
@@ -559,15 +555,15 @@ mod tests {
     #[test]
     fn resolve_directory_returns_parent_for_file() {
         let file = Path::new("/repo/docs/sample.txt");
-        let out = resolve_directory_to_open(file, false);
+        let out = resolve_directory_to_open(file);
         assert_eq!(out, Path::new("/repo/docs"));
     }
 
     #[test]
-    fn resolve_directory_keeps_directory_selection() {
+    fn resolve_directory_returns_parent_for_directory() {
         let dir = Path::new("/repo/docs");
-        let out = resolve_directory_to_open(dir, true);
-        assert_eq!(out, dir);
+        let out = resolve_directory_to_open(dir);
+        assert_eq!(out, Path::new("/repo"));
     }
 
     #[test]

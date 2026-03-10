@@ -169,13 +169,9 @@ git push origin v<version>
 - `version`
 - `url`
 - `sha256`
+- `rc-code-jp/homebrew-tap` の自動更新結果
 
-5. `rc-code-jp/homebrew-tap` の `Formula/minishelf.rb` を更新して push する
-
-```ruby
-version "<version>"
-sha256 "<checksums.txt の値>"
-```
+5. 自動更新が失敗した場合だけ `rc-code-jp/homebrew-tap` の `Formula/minishelf.rb` を手動更新して push する
 
 ユーザーはその後 `brew upgrade minishelf` で更新できます。
 

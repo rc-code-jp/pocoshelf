@@ -150,6 +150,10 @@ jobs:
     name: publish release
     runs-on: ubuntu-24.04
     needs: [resolve_ref, build_macos]
+    outputs:
+      version: ${{ steps.homebrew.outputs.version }}
+      archive_url: ${{ steps.homebrew.outputs.archive_url }}
+      archive_sha256: ${{ steps.homebrew.outputs.archive_sha256 }}
     permissions:
       contents: write
     env:
@@ -182,7 +186,8 @@ jobs:
             gh release create "$tag" dist/*.tar.gz dist/checksums.txt --verify-tag --repo "$GH_REPO"
           fi
 
-      - name: Show Homebrew tap update values
+      - name: Collect Homebrew tap update values
+        id: homebrew
         shell: bash
         run: |
           set -euo pipefail
@@ -196,10 +201,12 @@ jobs:
             exit 1
           fi
 
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "archive_url=$url" >> "$GITHUB_OUTPUT"
+          echo "archive_sha256=$sha256" >> "$GITHUB_OUTPUT"
+
           {
-            echo "## Homebrew tap manual update"
-            echo
-            echo "Update \\`Formula/minishelf.rb\\` in \\`rc-code-jp/homebrew-tap\\` with:"
+            echo "## Homebrew tap values"
             echo
             echo "- version: \\`${version}\\`"
             echo "- url: \\`${url}\\`"
@@ -211,3 +218,75 @@ jobs:
               echo "Signed/notarized archive: no"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  update_homebrew_tap:
+    name: update Homebrew tap
+    runs-on: ubuntu-24.04
+    needs: [release]
+    permissions:
+      contents: read
+    env:
+      TAP_REPOSITORY: rc-code-jp/homebrew-tap
+      FORMULA_PATH: Formula/minishelf.rb
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: rc-code-jp
+
+      - name: Checkout tap repository
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+        with:
+          repository: ${{ env.TAP_REPOSITORY }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: homebrew-tap
+
+      - name: Update formula
+        shell: bash
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          ARCHIVE_URL: ${{ needs.release.outputs.archive_url }}
+          ARCHIVE_SHA256: ${{ needs.release.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          formula="homebrew-tap/${FORMULA_PATH}"
+
+          ruby -e '
+            path, version, sha256 = ARGV
+            text = File.read(path)
+            text.sub!(/^(\s*version\s+").*(")$/,"\\1#{version}\\2") or abort("version line not found")
+            text.sub!(/^(\s*sha256\s+").*(")$/,"\\1#{sha256}\\2") or abort("sha256 line not found")
+            File.write(path, text)
+          ' "$formula" "$VERSION" "$ARCHIVE_SHA256"
+
+          {
+            echo "## Homebrew tap update"
+            echo
+            echo "- repository: \`${TAP_REPOSITORY}\`"
+            echo "- formula: \`${FORMULA_PATH}\`"
+            echo "- version: \`${VERSION}\`"
+            echo "- url: \`${ARCHIVE_URL}\`"
+            echo "- sha256: \`${ARCHIVE_SHA256}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit and push formula update
+        shell: bash
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd homebrew-tap
+          git config user.name "minishelf release bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${FORMULA_PATH}"
+
+          if git diff --cached --quiet; then
+            echo "No tap changes to commit"
+            exit 0
+          fi
+
+          git commit -m "minishelf ${VERSION}"
+          git push origin HEAD:main
