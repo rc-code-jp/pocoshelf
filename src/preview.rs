@@ -44,6 +44,7 @@ pub struct PreviewDirectoryEntry {
     pub path: PathBuf,
     pub name: String,
     pub is_dir: bool,
+    pub is_symlink: bool,
 }
 
 impl PreviewState {
@@ -124,6 +125,8 @@ impl PreviewState {
                 .map(|entry| {
                     if entry.is_dir {
                         format!("{}/", entry.name)
+                    } else if entry.is_symlink {
+                        format!("{}@", entry.name)
                     } else {
                         entry.name.clone()
                     }
@@ -207,6 +210,7 @@ struct DirectoryEntry {
     path: PathBuf,
     name: String,
     is_dir: bool,
+    is_symlink: bool,
 }
 
 fn load_directory_listing(
@@ -236,6 +240,7 @@ fn load_directory_listing(
             path: entry_path,
             name: entry.file_name().to_string_lossy().to_string(),
             is_dir: file_type.is_dir(),
+            is_symlink: file_type.is_symlink(),
         });
     }
 
@@ -247,6 +252,7 @@ fn load_directory_listing(
             path: entry.path,
             name: entry.name,
             is_dir: entry.is_dir,
+            is_symlink: entry.is_symlink,
         })
         .collect())
 }

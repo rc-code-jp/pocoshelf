@@ -60,6 +60,8 @@ fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
         let absolute_index = scroll_offset + absolute_index;
         let label = if node.is_dir {
             format!("{}/", node.name)
+        } else if node.is_symlink {
+            format!("{}@", node.name)
         } else {
             node.name.clone()
         };

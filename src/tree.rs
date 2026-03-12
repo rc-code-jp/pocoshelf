@@ -7,6 +7,7 @@ pub struct DirEntryNode {
     pub path: PathBuf,
     pub name: String,
     pub is_dir: bool,
+    pub is_symlink: bool,
 }
 
 #[derive(Debug)]
@@ -117,6 +118,7 @@ impl Tree {
                 path,
                 name,
                 is_dir: file_type.is_dir(),
+                is_symlink: file_type.is_symlink(),
             });
         }
 
