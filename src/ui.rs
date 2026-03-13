@@ -58,20 +58,30 @@ fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .enumerate()
     {
         let absolute_index = scroll_offset + absolute_index;
-        let label = if node.is_dir {
-            format!("{}/", node.name)
-        } else if node.is_symlink {
-            format!("{}@", node.name)
-        } else {
-            node.name.clone()
-        };
-
         let mut style = style_for_git(app.selected_git_state(&node.path, node.is_dir));
         if absolute_index == selected_index {
             style = style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
         }
 
-        lines.push(Line::from(Span::styled(label, style)));
+        let line = if node.is_dir {
+            Line::from(Span::styled(format!("{}/", node.name), style))
+        } else if node.is_symlink {
+            let target_text = std::fs::read_link(&node.path)
+                .map(|t| format!(" → {}", t.display()))
+                .unwrap_or_default();
+            let mut target_style = Style::default().fg(Color::Gray);
+            if absolute_index == selected_index {
+                target_style = target_style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
+            }
+            Line::from(vec![
+                Span::styled(node.name.clone(), style),
+                Span::styled(target_text, target_style),
+            ])
+        } else {
+            Line::from(Span::styled(node.name.clone(), style))
+        };
+
+        lines.push(line);
     }
 
     let title = format!("Dir: {}", app.tree.current_dir.display());
