@@ -198,6 +198,7 @@ git push origin v<version>
 
 詳細は [`docs/release.md`](docs/release.md) を参照してください。
 Homebrew tap 更新を GitHub App で自動化する場合は [`docs/github-app-homebrew-tap.md`](docs/github-app-homebrew-tap.md) を参照してください。
+このリポジトリの release workflow では、Node ランタイム依存のある JavaScript アクションを避けるため、GitHub App JWT と REST API で installation token を発行しています。
 
 ### Homebrew formula テンプレート
 
