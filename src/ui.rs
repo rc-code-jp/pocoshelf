@@ -8,7 +8,7 @@ use crate::app::App;
 use crate::git_status::GitState;
 use crate::preview::PreviewKind;
 use crate::preview::PreviewRenderMode;
-use crate::tree::DirEntryNode;
+use crate::tree::{DirEntryKind, DirEntryNode};
 
 const TREE_COLUMN_GAP: usize = 2;
 const TREE_DATE_WIDTH: usize = 10;
@@ -323,6 +323,10 @@ fn render_tree_line(
 }
 
 fn tree_name_text(node: &DirEntryNode) -> String {
+    if node.kind == DirEntryKind::ParentLink {
+        return String::from("../");
+    }
+
     if node.is_dir {
         return format!("{}/", node.name);
     }
@@ -338,6 +342,10 @@ fn tree_name_text(node: &DirEntryNode) -> String {
 }
 
 fn tree_size_text(node: &DirEntryNode) -> String {
+    if node.kind == DirEntryKind::ParentLink {
+        return String::new();
+    }
+
     if node.is_dir {
         return String::from("-");
     }
@@ -502,7 +510,7 @@ mod tests {
 
     use super::{
         format_bytes, tree_columns, tree_index_at, tree_scroll_offset, tree_size_text,
-        wrap_numbered_preview_line, DirEntryNode,
+        wrap_numbered_preview_line, DirEntryKind, DirEntryNode,
     };
     use crate::app::App;
     use crate::tree::TreeMode;
@@ -633,6 +641,7 @@ mod tests {
         modified_date: Option<&str>,
     ) -> DirEntryNode {
         DirEntryNode {
+            kind: DirEntryKind::Item,
             path: PathBuf::from(name),
             name: name.to_string(),
             is_dir,

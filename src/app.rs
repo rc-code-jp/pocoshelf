@@ -167,7 +167,10 @@ impl App {
             },
             Command::ExpandOrOpen => {
                 if self.focus == FocusPane::Tree {
-                    if self.tree.selected_is_dir() {
+                    if self.tree.selected_is_parent_link() {
+                        self.tree.collapse_selected();
+                        self.sync_tree_state();
+                    } else if self.tree.selected_is_dir() {
                         if let Err(err) = self.tree.expand_selected() {
                             self.status_message = format!("expand failed: {err}");
                         }
@@ -893,8 +896,9 @@ mod tests {
 
         assert_eq!(app.tree.mode, TreeMode::Changed);
         assert_eq!(app.tree.current_dir, root.join("src"));
-        assert_eq!(app.tree.entries.len(), 1);
-        assert_eq!(app.tree.entries[0].name, "nested");
+        assert_eq!(app.tree.entries.len(), 2);
+        assert_eq!(app.tree.entries[0].name, "..");
+        assert_eq!(app.tree.entries[1].name, "nested");
     }
 
     #[test]
@@ -928,9 +932,27 @@ mod tests {
 
         assert_eq!(effect, None);
         assert_eq!(app.tree.current_dir, tmp.path().join("sub"));
-        assert_eq!(app.tree.entries.len(), 1);
-        assert_eq!(app.tree.entries[0].name, "note.txt");
+        assert_eq!(app.tree.entries.len(), 2);
+        assert_eq!(app.tree.entries[0].name, "..");
+        assert_eq!(app.tree.entries[1].name, "note.txt");
         assert!(app.is_tree_focused());
+    }
+
+    #[test]
+    fn expand_or_open_on_parent_link_moves_back_to_parent_directory() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("sub")).expect("create dir should succeed");
+
+        let mut app = App::new(root.clone(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "sub");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        assert_eq!(app.tree.current_dir, root.join("sub"));
+
+        assert!(app.tree.select_index(0));
+        let _ = app.handle_command(Command::ExpandOrOpen);
+
+        assert_eq!(app.tree.current_dir, root);
     }
 
     #[test]
