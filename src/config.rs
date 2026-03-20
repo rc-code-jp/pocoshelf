@@ -19,8 +19,8 @@ pub struct LayoutConfig {
 impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
-            tree_ratio_normal: 70,
-            tree_ratio_preview_focused: 10,
+            tree_ratio_normal: 75,
+            tree_ratio_preview_focused: 5,
         }
     }
 }

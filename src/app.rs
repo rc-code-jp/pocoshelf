@@ -7,14 +7,17 @@ use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
 use notify::{RecursiveMode, Watcher};
+use ratatui::layout::Rect;
 
 use crate::config::Config;
 use crate::git_status::{collect_ignored_paths, GitSnapshot, GitState};
 use crate::preview::{PreviewKind, PreviewRenderMode, PreviewState};
 use crate::tree::{Tree, TreeMode};
+use crate::ui;
 
 const COPY_STATUS_DURATION: Duration = Duration::from_secs(3);
 const FS_REFRESH_DEBOUNCE: Duration = Duration::from_millis(300);
+const PREVIEW_WHEEL_SCROLL_AMOUNT: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusPane {
@@ -26,6 +29,7 @@ pub struct App {
     pub config: Config,
     pub startup_root: PathBuf,
     pub tree: Tree,
+    pub hovered_tree_index: Option<usize>,
     pub preview: PreviewState,
     pub focus: FocusPane,
     pub git: GitSnapshot,
@@ -46,6 +50,7 @@ pub struct App {
     pending_fs_refresh: bool,
     last_fs_event_at: Option<Instant>,
     preview_viewport_height: usize,
+    preview_viewport_width: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -107,6 +112,7 @@ impl App {
             config,
             startup_root,
             tree,
+            hovered_tree_index: None,
             preview,
             focus: FocusPane::Tree,
             git,
@@ -127,6 +133,7 @@ impl App {
             pending_fs_refresh: false,
             last_fs_event_at: None,
             preview_viewport_height: 1,
+            preview_viewport_width: 1,
         };
         app.update_changed_empty_status();
         Ok(app)
@@ -152,18 +159,21 @@ impl App {
                     self.tree.move_up();
                     self.sync_preview();
                 }
-                FocusPane::Preview => self.preview.scroll_up(1),
+                FocusPane::Preview => self.scroll_preview_up(1),
             },
             Command::MoveDown => match self.focus {
                 FocusPane::Tree => {
                     self.tree.move_down();
                     self.sync_preview();
                 }
-                FocusPane::Preview => self.preview.scroll_down(1),
+                FocusPane::Preview => self.scroll_preview_down(1),
             },
             Command::ExpandOrOpen => {
                 if self.focus == FocusPane::Tree {
-                    if self.tree.selected_is_dir() {
+                    if self.tree.selected_is_parent_link() {
+                        self.tree.collapse_selected();
+                        self.sync_tree_state();
+                    } else if self.tree.selected_is_dir() {
                         if let Err(err) = self.tree.expand_selected() {
                             self.status_message = format!("expand failed: {err}");
                         }
@@ -182,12 +192,12 @@ impl App {
                     self.sync_tree_state();
                 }
             }
-            Command::PreviewHalfPageUp => self.preview.scroll_up(self.preview_half_page_amount()),
+            Command::PreviewHalfPageUp => self.scroll_preview_up(self.preview_half_page_amount()),
             Command::PreviewHalfPageDown => {
-                self.preview.scroll_down(self.preview_half_page_amount())
+                self.scroll_preview_down(self.preview_half_page_amount())
             }
-            Command::PreviewPageUp => self.preview.scroll_up(self.preview_page_amount()),
-            Command::PreviewPageDown => self.preview.scroll_down(self.preview_page_amount()),
+            Command::PreviewPageUp => self.scroll_preview_up(self.preview_page_amount()),
+            Command::PreviewPageDown => self.scroll_preview_down(self.preview_page_amount()),
             Command::RefreshGit => self.request_git_refresh(true),
             Command::TogglePreviewMode => self.toggle_preview_mode(),
             Command::ToggleTreeMode => self.toggle_tree_mode(),
@@ -297,12 +307,69 @@ impl App {
         self.request_git_refresh(false);
     }
 
+    pub fn handle_tree_left_click(
+        &mut self,
+        terminal_area: Rect,
+        column: u16,
+        row: u16,
+    ) -> Option<AppEffect> {
+        if self.show_help {
+            return None;
+        }
+
+        if self.is_preview_focused() && ui::tree_contains(terminal_area, self, column, row) {
+            self.focus = FocusPane::Tree;
+            return None;
+        }
+
+        let tree_area = ui::tree_area(terminal_area, self);
+        let Some(index) = ui::tree_index_at(tree_area, self, column, row) else {
+            return None;
+        };
+
+        if !self.tree.select_index(index) {
+            return None;
+        }
+
+        self.sync_preview();
+        self.handle_command(Command::ExpandOrOpen)
+    }
+
+    pub fn update_tree_hover(&mut self, terminal_area: Rect, column: u16, row: u16) {
+        if self.show_help {
+            self.hovered_tree_index = None;
+            return;
+        }
+
+        let tree_area = ui::tree_area(terminal_area, self);
+        self.hovered_tree_index = ui::tree_index_at(tree_area, self, column, row);
+    }
+
+    pub fn handle_preview_wheel(
+        &mut self,
+        terminal_area: Rect,
+        column: u16,
+        row: u16,
+        scroll_up: bool,
+    ) {
+        if self.show_help || !ui::preview_contains(terminal_area, self, column, row) {
+            return;
+        }
+
+        if scroll_up {
+            self.scroll_preview_up(PREVIEW_WHEEL_SCROLL_AMOUNT);
+        } else {
+            self.scroll_preview_down(PREVIEW_WHEEL_SCROLL_AMOUNT);
+        }
+    }
+
     fn sync_preview(&mut self) {
         self.preview = PreviewState::from_path(
             &self.startup_root,
             self.tree.selected_path(),
             self.preferred_preview_mode,
         );
+        self.clamp_preview_scroll();
     }
 
     fn toggle_preview_mode(&mut self) {
@@ -337,6 +404,8 @@ impl App {
         } else {
             self.preview.jump_to_prev_change()
         };
+
+        self.clamp_preview_scroll();
 
         if !moved {
             self.set_temporary_status("no change marker in current view");
@@ -424,8 +493,10 @@ impl App {
         self.focus == FocusPane::Preview
     }
 
-    pub fn set_preview_viewport_height(&mut self, height: usize) {
+    pub fn set_preview_viewport_size(&mut self, width: usize, height: usize) {
+        self.preview_viewport_width = width.max(1);
         self.preview_viewport_height = height.max(1);
+        self.clamp_preview_scroll();
     }
 
     fn set_temporary_status(&mut self, msg: impl Into<String>) {
@@ -439,6 +510,25 @@ impl App {
 
     fn preview_page_amount(&self) -> usize {
         self.preview_viewport_height.max(1)
+    }
+
+    fn scroll_preview_up(&mut self, amount: usize) {
+        self.preview.scroll_up(amount);
+        self.clamp_preview_scroll();
+    }
+
+    fn scroll_preview_down(&mut self, amount: usize) {
+        self.preview.scroll_down(amount);
+        self.clamp_preview_scroll();
+    }
+
+    fn clamp_preview_scroll(&mut self) {
+        let max_scroll = ui::preview_max_scroll(
+            &self.preview,
+            self.preview_viewport_height,
+            self.preview_viewport_width,
+        );
+        self.preview.scroll = self.preview.scroll.min(max_scroll);
     }
 
     pub fn set_external_status(&mut self, msg: impl Into<String>) {
@@ -461,6 +551,9 @@ impl App {
 
     fn sync_tree_state(&mut self) {
         self.refresh_visible_ignored_paths();
+        self.hovered_tree_index = self
+            .hovered_tree_index
+            .filter(|index| *index < self.tree.entries.len());
         self.sync_preview();
         self.update_changed_empty_status();
     }
@@ -540,6 +633,8 @@ mod tests {
     use crate::git_status::GitState;
     use crate::preview::PreviewRenderMode;
     use crate::tree::TreeMode;
+    use crate::ui;
+    use ratatui::layout::Rect;
 
     use super::{
         format_relative_with_at, resolve_directory_to_open, App, AppEffect, Command,
@@ -602,7 +697,7 @@ mod tests {
             App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
         select_by_file_name(&mut app, "note.txt");
         let _ = app.handle_command(Command::ExpandOrOpen);
-        app.set_preview_viewport_height(6);
+        app.set_preview_viewport_size(20, 6);
 
         let _ = app.handle_command(Command::PreviewHalfPageDown);
         assert_eq!(app.preview.scroll, 3);
@@ -624,13 +719,152 @@ mod tests {
             App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
         select_by_file_name(&mut app, "note.txt");
         let _ = app.handle_command(Command::ExpandOrOpen);
-        app.set_preview_viewport_height(4);
+        app.set_preview_viewport_size(20, 4);
 
         let _ = app.handle_command(Command::PreviewPageDown);
         assert_eq!(app.preview.scroll, 4);
 
         let _ = app.handle_command(Command::PreviewPageUp);
         assert_eq!(app.preview.scroll, 0);
+    }
+
+    #[test]
+    fn preview_wheel_scrolls_down_by_three_lines() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(
+            tmp.path().join("note.txt"),
+            "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
+        )
+        .expect("write should succeed");
+
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "note.txt");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        app.set_preview_viewport_size(20, 4);
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let preview_area = ui::preview_area(terminal_area, &app);
+
+        app.handle_preview_wheel(terminal_area, preview_area.x + 1, preview_area.y + 1, false);
+
+        assert_eq!(app.preview.scroll, 3);
+        assert!(app.is_preview_focused());
+    }
+
+    #[test]
+    fn preview_wheel_scrolls_up_and_clamps_at_zero() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(
+            tmp.path().join("note.txt"),
+            "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
+        )
+        .expect("write should succeed");
+
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "note.txt");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        app.set_preview_viewport_size(20, 4);
+        app.preview.scroll = 2;
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let preview_area = ui::preview_area(terminal_area, &app);
+
+        app.handle_preview_wheel(terminal_area, preview_area.x + 1, preview_area.y + 1, true);
+
+        assert_eq!(app.preview.scroll, 0);
+        assert!(app.is_preview_focused());
+    }
+
+    #[test]
+    fn preview_wheel_ignores_non_preview_region() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(
+            tmp.path().join("note.txt"),
+            "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
+        )
+        .expect("write should succeed");
+
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "note.txt");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        app.set_preview_viewport_size(20, 4);
+        let before_focus = app.focus;
+        let terminal_area = Rect::new(0, 0, 20, 10);
+
+        app.handle_preview_wheel(terminal_area, 1, 1, false);
+
+        assert_eq!(app.preview.scroll, 0);
+        assert_eq!(app.focus, before_focus);
+    }
+
+    #[test]
+    fn preview_wheel_ignores_help_mode() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(
+            tmp.path().join("note.txt"),
+            "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
+        )
+        .expect("write should succeed");
+
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "note.txt");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        app.set_preview_viewport_size(20, 4);
+        app.show_help = true;
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let preview_area = ui::preview_area(terminal_area, &app);
+
+        app.handle_preview_wheel(terminal_area, preview_area.x + 1, preview_area.y + 1, false);
+
+        assert_eq!(app.preview.scroll, 0);
+    }
+
+    #[test]
+    fn preview_page_down_stops_at_last_full_page() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(
+            tmp.path().join("note.txt"),
+            "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
+        )
+        .expect("write should succeed");
+
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "note.txt");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        app.set_preview_viewport_size(20, 4);
+
+        for _ in 0..5 {
+            let _ = app.handle_command(Command::PreviewPageDown);
+        }
+
+        assert_eq!(app.preview.scroll, 6);
+    }
+
+    #[test]
+    fn preview_wheel_down_stops_at_last_full_page() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(
+            tmp.path().join("note.txt"),
+            "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n",
+        )
+        .expect("write should succeed");
+
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "note.txt");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        app.set_preview_viewport_size(20, 4);
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let preview_area = ui::preview_area(terminal_area, &app);
+
+        for _ in 0..5 {
+            app.handle_preview_wheel(terminal_area, preview_area.x + 1, preview_area.y + 1, false);
+        }
+
+        assert_eq!(app.preview.scroll, 6);
     }
 
     #[test]
@@ -851,8 +1085,168 @@ mod tests {
 
         assert_eq!(app.tree.mode, TreeMode::Changed);
         assert_eq!(app.tree.current_dir, root.join("src"));
-        assert_eq!(app.tree.entries.len(), 1);
-        assert_eq!(app.tree.entries[0].name, "nested");
+        assert_eq!(app.tree.entries.len(), 2);
+        assert_eq!(app.tree.entries[0].name, "..");
+        assert_eq!(app.tree.entries[1].name, "nested");
+    }
+
+    #[test]
+    fn tree_left_click_selects_file_and_moves_focus_to_preview() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        fs::write(tmp.path().join("b.txt"), "b").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        let effect = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 2);
+
+        assert_eq!(effect, None);
+        assert_eq!(app.tree.selected_path(), tmp.path().join("b.txt").as_path());
+        assert!(app.is_preview_focused());
+    }
+
+    #[test]
+    fn tree_left_click_expands_directory() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::create_dir_all(tmp.path().join("sub")).expect("create dir should succeed");
+        fs::write(tmp.path().join("sub/note.txt"), "hello").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        let effect = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 1);
+
+        assert_eq!(effect, None);
+        assert_eq!(app.tree.current_dir, tmp.path().join("sub"));
+        assert_eq!(app.tree.entries.len(), 2);
+        assert_eq!(app.tree.entries[0].name, "..");
+        assert_eq!(app.tree.entries[1].name, "note.txt");
+        assert!(app.is_tree_focused());
+    }
+
+    #[test]
+    fn expand_or_open_on_parent_link_moves_back_to_parent_directory() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("sub")).expect("create dir should succeed");
+
+        let mut app = App::new(root.clone(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "sub");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        assert_eq!(app.tree.current_dir, root.join("sub"));
+
+        assert!(app.tree.select_index(0));
+        let _ = app.handle_command(Command::ExpandOrOpen);
+
+        assert_eq!(app.tree.current_dir, root);
+    }
+
+    #[test]
+    fn tree_left_click_ignores_outside_tree_content() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let before = app.tree.selected_path().to_path_buf();
+
+        let effect = app.handle_tree_left_click(Rect::new(0, 0, 20, 5), 0, 0);
+
+        assert_eq!(effect, None);
+        assert_eq!(app.tree.selected_path(), before.as_path());
+        assert!(app.is_tree_focused());
+    }
+
+    #[test]
+    fn tree_left_click_in_preview_empty_space_returns_focus_to_tree() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "a.txt");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+        let before_path = app.tree.selected_path().to_path_buf();
+        let before_scroll = app.preview.scroll;
+
+        let effect = app.handle_tree_left_click(
+            terminal_area,
+            tree_area.right() - 2,
+            tree_area.bottom() - 2,
+        );
+
+        assert_eq!(effect, None);
+        assert!(app.is_tree_focused());
+        assert_eq!(app.tree.selected_path(), before_path.as_path());
+        assert_eq!(app.preview.scroll, before_scroll);
+    }
+
+    #[test]
+    fn tree_left_click_on_border_in_preview_returns_focus_to_tree() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "a.txt");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        let effect = app.handle_tree_left_click(terminal_area, tree_area.x, tree_area.y);
+
+        assert_eq!(effect, None);
+        assert!(app.is_tree_focused());
+    }
+
+    #[test]
+    fn tree_left_click_on_item_in_preview_only_returns_focus_to_tree() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        fs::write(tmp.path().join("b.txt"), "b").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "a.txt");
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+        let before_path = app.tree.selected_path().to_path_buf();
+
+        let effect = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 2);
+
+        assert_eq!(effect, None);
+        assert!(app.is_tree_focused());
+        assert_eq!(app.tree.selected_path(), before_path.as_path());
+    }
+
+    #[test]
+    fn tree_hover_tracks_non_selected_row() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        fs::write(tmp.path().join("b.txt"), "b").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        app.update_tree_hover(terminal_area, tree_area.x + 1, tree_area.y + 2);
+
+        assert_eq!(app.hovered_tree_index, Some(1));
+    }
+
+    #[test]
+    fn tree_hover_clears_outside_tree_content() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        app.hovered_tree_index = Some(0);
+
+        app.update_tree_hover(Rect::new(0, 0, 20, 10), 0, 0);
+
+        assert_eq!(app.hovered_tree_index, None);
     }
 
     #[test]

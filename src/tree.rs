@@ -25,12 +25,19 @@ impl TreeMode {
 
 #[derive(Debug, Clone)]
 pub struct DirEntryNode {
+    pub kind: DirEntryKind,
     pub path: PathBuf,
     pub name: String,
     pub is_dir: bool,
     pub is_symlink: bool,
     pub size_bytes: Option<u64>,
     pub modified_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirEntryKind {
+    ParentLink,
+    Item,
 }
 
 #[derive(Debug)]
@@ -60,7 +67,10 @@ impl Tree {
     pub fn selected_path(&self) -> &Path {
         self.entries
             .get(self.selected)
-            .map(|entry| entry.path.as_path())
+            .map(|entry| match entry.kind {
+                DirEntryKind::ParentLink => self.current_dir.as_path(),
+                DirEntryKind::Item => entry.path.as_path(),
+            })
             .unwrap_or(self.current_dir.as_path())
     }
 
@@ -114,6 +124,11 @@ impl Tree {
             return Ok(());
         };
 
+        if selected.kind == DirEntryKind::ParentLink {
+            self.collapse_selected();
+            return Ok(());
+        }
+
         if !selected.is_dir {
             return Ok(());
         }
@@ -126,10 +141,26 @@ impl Tree {
         self.selected
     }
 
+    pub fn select_index(&mut self, index: usize) -> bool {
+        if index >= self.entries.len() {
+            return false;
+        }
+
+        self.selected = index;
+        true
+    }
+
     pub fn selected_is_dir(&self) -> bool {
         self.entries
             .get(self.selected)
-            .map(|entry| entry.is_dir)
+            .map(|entry| entry.is_dir || entry.kind == DirEntryKind::ParentLink)
+            .unwrap_or(false)
+    }
+
+    pub fn selected_is_parent_link(&self) -> bool {
+        self.entries
+            .get(self.selected)
+            .map(|entry| entry.kind == DirEntryKind::ParentLink)
             .unwrap_or(false)
     }
 
@@ -162,6 +193,7 @@ impl Tree {
                 let name = entry.file_name().to_string_lossy().to_string();
                 let (size_bytes, modified_date) = load_entry_metadata(&entry, is_dir);
                 entries.push(DirEntryNode {
+                    kind: DirEntryKind::Item,
                     path,
                     name,
                     is_dir,
@@ -182,10 +214,25 @@ impl Tree {
                 }
             }
 
+            if self.current_dir != self.startup_root {
+                entries.insert(
+                    0,
+                    DirEntryNode {
+                        kind: DirEntryKind::ParentLink,
+                        path: self.current_dir.clone(),
+                        name: String::from(".."),
+                        is_dir: false,
+                        is_symlink: false,
+                        size_bytes: None,
+                        modified_date: None,
+                    },
+                );
+            }
+
             self.entries = entries;
             self.selected = prefer_selected_path
                 .and_then(|path| self.entries.iter().position(|entry| entry.path == path))
-                .unwrap_or(0);
+                .unwrap_or_else(|| default_selected_index(&self.entries));
             return Ok(());
         }
     }
@@ -210,6 +257,16 @@ fn collect_existing_changed_paths(git: &GitSnapshot, mode: TreeMode) -> HashSet<
         .into_iter()
         .filter(|path| path.exists())
         .collect()
+}
+
+fn default_selected_index(entries: &[DirEntryNode]) -> usize {
+    if entries.first().map(|entry| entry.kind) == Some(DirEntryKind::ParentLink)
+        && entries.len() > 1
+    {
+        1
+    } else {
+        0
+    }
 }
 
 fn compare_entries(a: &DirEntryNode, b: &DirEntryNode) -> Ordering {
@@ -263,7 +320,7 @@ mod tests {
 
     use crate::git_status::GitSnapshot;
 
-    use super::{Tree, TreeMode};
+    use super::{DirEntryKind, Tree, TreeMode};
 
     #[test]
     fn tree_stays_within_startup_root() {
@@ -276,7 +333,9 @@ mod tests {
             .expect("tree should build");
 
         for node in &tree.entries {
-            assert!(node.path.starts_with(&root));
+            if node.kind == DirEntryKind::Item {
+                assert!(node.path.starts_with(&root));
+            }
         }
     }
 
@@ -313,6 +372,52 @@ mod tests {
     }
 
     #[test]
+    fn parent_link_is_inserted_at_top_below_startup_root() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("sub")).expect("create dirs should work");
+        fs::write(root.join("sub/file.txt"), "hello").expect("write file should work");
+
+        let mut tree =
+            Tree::new(root, TreeMode::Normal, &GitSnapshot::default()).expect("tree should build");
+        tree.expand_selected().expect("expand should work");
+
+        assert_eq!(tree.entries[0].kind, DirEntryKind::ParentLink);
+        assert_eq!(tree.entries[0].name, "..");
+    }
+
+    #[test]
+    fn parent_link_is_hidden_at_startup_root() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("sub")).expect("create dirs should work");
+
+        let tree =
+            Tree::new(root, TreeMode::Normal, &GitSnapshot::default()).expect("tree should build");
+
+        assert!(tree
+            .entries
+            .iter()
+            .all(|entry| entry.kind != DirEntryKind::ParentLink));
+    }
+
+    #[test]
+    fn expanding_parent_link_moves_back_to_parent_directory() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("sub")).expect("create dirs should work");
+
+        let mut tree = Tree::new(root.clone(), TreeMode::Normal, &GitSnapshot::default())
+            .expect("tree should build");
+        tree.expand_selected().expect("expand should work");
+        assert!(tree.select_index(0));
+
+        tree.expand_selected().expect("parent expand should work");
+
+        assert_eq!(tree.current_dir, root);
+    }
+
+    #[test]
     fn changed_mode_shows_changed_ancestors_only() {
         let tmp = tempdir().expect("tmpdir should exist");
         let root = tmp.path();
@@ -330,11 +435,13 @@ mod tests {
         assert_eq!(tree.entries.len(), 1);
         assert_eq!(tree.entries[0].name, "src");
         tree.expand_selected().expect("expand should work");
-        assert_eq!(tree.entries.len(), 1);
-        assert_eq!(tree.entries[0].name, "nested");
+        assert_eq!(tree.entries.len(), 2);
+        assert_eq!(tree.entries[0].kind, DirEntryKind::ParentLink);
+        assert_eq!(tree.entries[1].name, "nested");
         tree.expand_selected().expect("expand should work");
-        assert_eq!(tree.entries.len(), 1);
-        assert_eq!(tree.entries[0].name, "file.txt");
+        assert_eq!(tree.entries.len(), 2);
+        assert_eq!(tree.entries[0].kind, DirEntryKind::ParentLink);
+        assert_eq!(tree.entries[1].name, "file.txt");
     }
 
     #[test]
@@ -357,8 +464,9 @@ mod tests {
             .expect("mode switch should work");
 
         assert_eq!(tree.current_dir, root.join("src"));
-        assert_eq!(tree.entries.len(), 1);
-        assert_eq!(tree.entries[0].name, "nested");
+        assert_eq!(tree.entries.len(), 2);
+        assert_eq!(tree.entries[0].kind, DirEntryKind::ParentLink);
+        assert_eq!(tree.entries[1].name, "nested");
     }
 
     #[test]
@@ -389,7 +497,7 @@ mod tests {
         let file = tree
             .entries
             .iter()
-            .find(|entry| entry.name == "note.txt")
+            .find(|entry| entry.kind == DirEntryKind::Item && entry.name == "note.txt")
             .expect("note.txt should exist");
 
         assert_eq!(file.size_bytes, Some(5));
@@ -407,10 +515,38 @@ mod tests {
         let dir = tree
             .entries
             .iter()
-            .find(|entry| entry.name == "sub")
+            .find(|entry| entry.kind == DirEntryKind::Item && entry.name == "sub")
             .expect("sub should exist");
 
         assert_eq!(dir.size_bytes, None);
+    }
+
+    #[test]
+    fn select_index_updates_selected_entry() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("a_dir")).expect("create dir should work");
+        fs::create_dir_all(root.join("b_dir")).expect("create dir should work");
+
+        let mut tree =
+            Tree::new(root, TreeMode::Normal, &GitSnapshot::default()).expect("tree should build");
+
+        assert!(tree.select_index(1));
+        assert_eq!(tree.selected_index(), 1);
+    }
+
+    #[test]
+    fn select_index_ignores_out_of_bounds() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("sub")).expect("create dir should work");
+
+        let mut tree =
+            Tree::new(root, TreeMode::Normal, &GitSnapshot::default()).expect("tree should build");
+        let before = tree.selected_index();
+
+        assert!(!tree.select_index(99));
+        assert_eq!(tree.selected_index(), before);
     }
 
     #[test]
@@ -429,7 +565,7 @@ mod tests {
             let link = tree
                 .entries
                 .iter()
-                .find(|entry| entry.name == "broken-link")
+                .find(|entry| entry.kind == DirEntryKind::Item && entry.name == "broken-link")
                 .expect("broken link should exist");
 
             assert!(link.is_symlink);

@@ -14,12 +14,16 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use crossterm::event::{self, DisableFocusChange, EnableFocusChange, Event};
+use crossterm::event::{
+    self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event,
+    MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
+use ratatui::layout::Rect;
 use ratatui::Terminal;
 
 use crate::app::{App, AppEffect};
@@ -44,7 +48,12 @@ fn main() -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableFocusChange)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableFocusChange,
+        EnableMouseCapture
+    )?;
     let _cleanup = TerminalCleanup;
 
     let backend = CrosstermBackend::new(stdout);
@@ -70,7 +79,10 @@ fn run(
     while !app.should_quit {
         app.poll_background_tasks();
         terminal.draw(|f| {
-            app.set_preview_viewport_height(ui::preview_viewport_height(f.area(), &app));
+            app.set_preview_viewport_size(
+                ui::preview_viewport_width(f.area(), &app),
+                ui::preview_viewport_height(f.area(), &app),
+            );
             ui::render(f, &app);
         })?;
 
@@ -96,6 +108,48 @@ fn run(
                     }
                 }
                 Event::FocusGained => app.on_focus_gained(),
+                Event::Mouse(mouse_event) => {
+                    let terminal_size = terminal.size()?;
+                    let terminal_area = Rect::new(0, 0, terminal_size.width, terminal_size.height);
+
+                    if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
+                        if let Some(effect) = app.handle_tree_left_click(
+                            terminal_area,
+                            mouse_event.column,
+                            mouse_event.row,
+                        ) {
+                            match effect {
+                                AppEffect::OpenInVi(path) => match open_in_vi(terminal, &path) {
+                                    Ok(()) => {
+                                        app.set_external_status(format!(
+                                            "opened in vi: {}",
+                                            path.display()
+                                        ));
+                                    }
+                                    Err(err) => {
+                                        app.set_external_status(format!("open failed: {err}"));
+                                    }
+                                },
+                            }
+                        }
+                    } else if matches!(mouse_event.kind, MouseEventKind::ScrollUp) {
+                        app.handle_preview_wheel(
+                            terminal_area,
+                            mouse_event.column,
+                            mouse_event.row,
+                            true,
+                        );
+                    } else if matches!(mouse_event.kind, MouseEventKind::ScrollDown) {
+                        app.handle_preview_wheel(
+                            terminal_area,
+                            mouse_event.column,
+                            mouse_event.row,
+                            false,
+                        );
+                    } else if matches!(mouse_event.kind, MouseEventKind::Moved) {
+                        app.update_tree_hover(terminal_area, mouse_event.column, mouse_event.row);
+                    }
+                }
                 _ => {}
             }
         }
@@ -141,6 +195,11 @@ impl Drop for TerminalCleanup {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
         let mut stdout = io::stdout();
-        let _ = execute!(stdout, DisableFocusChange, LeaveAlternateScreen);
+        let _ = execute!(
+            stdout,
+            DisableMouseCapture,
+            DisableFocusChange,
+            LeaveAlternateScreen
+        );
     }
 }
