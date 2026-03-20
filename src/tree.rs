@@ -126,6 +126,15 @@ impl Tree {
         self.selected
     }
 
+    pub fn select_index(&mut self, index: usize) -> bool {
+        if index >= self.entries.len() {
+            return false;
+        }
+
+        self.selected = index;
+        true
+    }
+
     pub fn selected_is_dir(&self) -> bool {
         self.entries
             .get(self.selected)
@@ -411,6 +420,34 @@ mod tests {
             .expect("sub should exist");
 
         assert_eq!(dir.size_bytes, None);
+    }
+
+    #[test]
+    fn select_index_updates_selected_entry() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("a_dir")).expect("create dir should work");
+        fs::create_dir_all(root.join("b_dir")).expect("create dir should work");
+
+        let mut tree =
+            Tree::new(root, TreeMode::Normal, &GitSnapshot::default()).expect("tree should build");
+
+        assert!(tree.select_index(1));
+        assert_eq!(tree.selected_index(), 1);
+    }
+
+    #[test]
+    fn select_index_ignores_out_of_bounds() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("sub")).expect("create dir should work");
+
+        let mut tree =
+            Tree::new(root, TreeMode::Normal, &GitSnapshot::default()).expect("tree should build");
+        let before = tree.selected_index();
+
+        assert!(!tree.select_index(99));
+        assert_eq!(tree.selected_index(), before);
     }
 
     #[test]

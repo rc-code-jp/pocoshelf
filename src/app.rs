@@ -7,11 +7,13 @@ use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
 use notify::{RecursiveMode, Watcher};
+use ratatui::layout::Rect;
 
 use crate::config::Config;
 use crate::git_status::{collect_ignored_paths, GitSnapshot, GitState};
 use crate::preview::{PreviewKind, PreviewRenderMode, PreviewState};
 use crate::tree::{Tree, TreeMode};
+use crate::ui;
 
 const COPY_STATUS_DURATION: Duration = Duration::from_secs(3);
 const FS_REFRESH_DEBOUNCE: Duration = Duration::from_millis(300);
@@ -26,6 +28,7 @@ pub struct App {
     pub config: Config,
     pub startup_root: PathBuf,
     pub tree: Tree,
+    pub hovered_tree_index: Option<usize>,
     pub preview: PreviewState,
     pub focus: FocusPane,
     pub git: GitSnapshot,
@@ -107,6 +110,7 @@ impl App {
             config,
             startup_root,
             tree,
+            hovered_tree_index: None,
             preview,
             focus: FocusPane::Tree,
             git,
@@ -297,6 +301,39 @@ impl App {
         self.request_git_refresh(false);
     }
 
+    pub fn handle_tree_left_click(
+        &mut self,
+        terminal_area: Rect,
+        column: u16,
+        row: u16,
+    ) -> Option<AppEffect> {
+        if self.show_help {
+            return None;
+        }
+
+        let tree_area = ui::tree_area(terminal_area, self);
+        let Some(index) = ui::tree_index_at(tree_area, self, column, row) else {
+            return None;
+        };
+
+        if !self.tree.select_index(index) {
+            return None;
+        }
+
+        self.sync_preview();
+        self.handle_command(Command::ExpandOrOpen)
+    }
+
+    pub fn update_tree_hover(&mut self, terminal_area: Rect, column: u16, row: u16) {
+        if self.show_help {
+            self.hovered_tree_index = None;
+            return;
+        }
+
+        let tree_area = ui::tree_area(terminal_area, self);
+        self.hovered_tree_index = ui::tree_index_at(tree_area, self, column, row);
+    }
+
     fn sync_preview(&mut self) {
         self.preview = PreviewState::from_path(
             &self.startup_root,
@@ -461,6 +498,9 @@ impl App {
 
     fn sync_tree_state(&mut self) {
         self.refresh_visible_ignored_paths();
+        self.hovered_tree_index = self
+            .hovered_tree_index
+            .filter(|index| *index < self.tree.entries.len());
         self.sync_preview();
         self.update_changed_empty_status();
     }
@@ -540,6 +580,8 @@ mod tests {
     use crate::git_status::GitState;
     use crate::preview::PreviewRenderMode;
     use crate::tree::TreeMode;
+    use crate::ui;
+    use ratatui::layout::Rect;
 
     use super::{
         format_relative_with_at, resolve_directory_to_open, App, AppEffect, Command,
@@ -853,6 +895,85 @@ mod tests {
         assert_eq!(app.tree.current_dir, root.join("src"));
         assert_eq!(app.tree.entries.len(), 1);
         assert_eq!(app.tree.entries[0].name, "nested");
+    }
+
+    #[test]
+    fn tree_left_click_selects_file_and_moves_focus_to_preview() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        fs::write(tmp.path().join("b.txt"), "b").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        let effect = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 2);
+
+        assert_eq!(effect, None);
+        assert_eq!(app.tree.selected_path(), tmp.path().join("b.txt").as_path());
+        assert!(app.is_preview_focused());
+    }
+
+    #[test]
+    fn tree_left_click_expands_directory() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::create_dir_all(tmp.path().join("sub")).expect("create dir should succeed");
+        fs::write(tmp.path().join("sub/note.txt"), "hello").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        let effect = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 1);
+
+        assert_eq!(effect, None);
+        assert_eq!(app.tree.current_dir, tmp.path().join("sub"));
+        assert_eq!(app.tree.entries.len(), 1);
+        assert_eq!(app.tree.entries[0].name, "note.txt");
+        assert!(app.is_tree_focused());
+    }
+
+    #[test]
+    fn tree_left_click_ignores_outside_tree_content() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let before = app.tree.selected_path().to_path_buf();
+
+        let effect = app.handle_tree_left_click(Rect::new(0, 0, 20, 5), 0, 0);
+
+        assert_eq!(effect, None);
+        assert_eq!(app.tree.selected_path(), before.as_path());
+        assert!(app.is_tree_focused());
+    }
+
+    #[test]
+    fn tree_hover_tracks_non_selected_row() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        fs::write(tmp.path().join("b.txt"), "b").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        app.update_tree_hover(terminal_area, tree_area.x + 1, tree_area.y + 2);
+
+        assert_eq!(app.hovered_tree_index, Some(1));
+    }
+
+    #[test]
+    fn tree_hover_clears_outside_tree_content() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        app.hovered_tree_index = Some(0);
+
+        app.update_tree_hover(Rect::new(0, 0, 20, 10), 0, 0);
+
+        assert_eq!(app.hovered_tree_index, None);
     }
 
     #[test]
