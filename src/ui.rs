@@ -10,7 +10,7 @@ use crate::git_status::GitState;
 use crate::preview::PreviewKind;
 use crate::preview::PreviewRenderMode;
 use crate::preview::PreviewState;
-use crate::tree::{DirEntryKind, DirEntryNode};
+use crate::tree::DirEntryNode;
 
 const TREE_COLUMN_GAP: usize = 2;
 const TREE_DATE_WIDTH: usize = 10;
@@ -112,11 +112,19 @@ pub fn preview_max_scroll(
     0
 }
 
-pub fn tree_scroll_offset(viewport_height: usize, selected_index: usize) -> usize {
-    if viewport_height == 0 || selected_index < viewport_height {
+pub fn tree_max_scroll(entry_count: usize, viewport_height: usize) -> usize {
+    if viewport_height == 0 {
+        return 0;
+    }
+
+    entry_count.saturating_sub(viewport_height)
+}
+
+pub fn tree_scroll_offset(viewport_height: usize, scroll: usize, entry_count: usize) -> usize {
+    if viewport_height == 0 {
         0
     } else {
-        selected_index - viewport_height + 1
+        scroll.min(tree_max_scroll(entry_count, viewport_height))
     }
 }
 
@@ -137,7 +145,8 @@ pub fn tree_index_at(area: Rect, app: &App, column: u16, row: u16) -> Option<usi
         return None;
     }
 
-    let scroll_offset = tree_scroll_offset(viewport_height, app.tree.selected_index());
+    let scroll_offset =
+        tree_scroll_offset(viewport_height, app.tree_scroll(), app.tree.entries.len());
     let absolute_index = scroll_offset + usize::from(inner_y);
     if absolute_index >= app.tree.entries.len() {
         return None;
@@ -182,7 +191,8 @@ fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let viewport_height = area.height.saturating_sub(2) as usize;
     let inner_width = area.width.saturating_sub(2) as usize;
     let selected_index = app.tree.selected_index();
-    let scroll_offset = tree_scroll_offset(viewport_height, selected_index);
+    let scroll_offset =
+        tree_scroll_offset(viewport_height, app.tree_scroll(), app.tree.entries.len());
 
     let end_index = app
         .tree
@@ -209,6 +219,11 @@ fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
             style,
             absolute_index == selected_index,
         ));
+    }
+
+    let blank = " ".repeat(inner_width);
+    while lines.len() < viewport_height {
+        lines.push(Line::from(Span::raw(blank.clone())));
     }
 
     let mut block = Block::default()
@@ -416,29 +431,24 @@ fn render_tree_line(
 }
 
 fn tree_name_text(node: &DirEntryNode) -> String {
-    if node.kind == DirEntryKind::ParentLink {
-        return String::from("../");
-    }
+    let indent = "  ".repeat(node.depth);
+    let marker = tree_marker(node);
 
     if node.is_dir {
-        return format!("{}/", node.name);
+        return format!("{indent}{marker} {}/", node.name);
     }
 
     if node.is_symlink {
         let target_text = std::fs::read_link(&node.path)
             .map(|t| format!(" -> {}", t.display()))
             .unwrap_or_default();
-        return format!("{}{}", node.name, target_text);
+        return format!("{indent}{marker} {}{}", node.name, target_text);
     }
 
-    node.name.clone()
+    format!("{indent}{marker} {}", node.name)
 }
 
 fn tree_size_text(node: &DirEntryNode) -> String {
-    if node.kind == DirEntryKind::ParentLink {
-        return String::new();
-    }
-
     if node.is_dir {
         return String::from("-");
     }
@@ -460,6 +470,18 @@ fn format_bytes(size_bytes: u64) -> String {
         format!("{value:.0}{unit}")
     } else {
         format!("{value:.1}{unit}")
+    }
+}
+
+fn tree_marker(node: &DirEntryNode) -> &'static str {
+    if node.is_dir {
+        if node.is_expanded {
+            "▼"
+        } else {
+            "▶"
+        }
+    } else {
+        " "
     }
 }
 
@@ -570,11 +592,11 @@ fn help_content(language: HelpLanguage) -> (&'static str, Vec<Line<'static>>) {
             ));
             lines.extend(help_entry(
                 "h / Left",
-                "Collapse dir or move focus back to tree",
+                "Collapse dir, move to parent, or move focus back to tree",
             ));
             lines.extend(help_entry(
                 "l / Right / Enter",
-                "Expand dir or open file preview",
+                "Toggle dir or open file preview",
             ));
             lines.extend(help_entry(
                 "Left click",
@@ -621,11 +643,11 @@ fn help_content(language: HelpLanguage) -> (&'static str, Vec<Line<'static>>) {
             ));
             lines.extend(help_entry(
                 "h / Left",
-                "ディレクトリを閉じる、またはツリーへ戻る",
+                "ディレクトリを閉じる、親へ移動する、またはツリーへ戻る",
             ));
             lines.extend(help_entry(
                 "l / Right / Enter",
-                "ディレクトリを開く、またはファイルをプレビュー",
+                "ディレクトリを開閉する、またはファイルをプレビュー",
             ));
             lines.extend(help_entry(
                 "左クリック",
@@ -730,8 +752,9 @@ mod tests {
 
     use super::{
         format_bytes, help_entry, help_max_scroll, preview_area, preview_contains,
-        preview_max_scroll, tree_area, tree_columns, tree_contains, tree_index_at,
-        tree_scroll_offset, tree_size_text, wrap_numbered_preview_line, DirEntryKind, DirEntryNode,
+        preview_max_scroll, tree_area, tree_columns, tree_contains, tree_index_at, tree_max_scroll,
+        tree_name_text, tree_scroll_offset, tree_size_text, wrap_numbered_preview_line,
+        DirEntryNode,
     };
     use crate::app::App;
     use crate::config::HelpLanguage;
@@ -825,10 +848,17 @@ mod tests {
     }
 
     #[test]
-    fn tree_scroll_offset_keeps_selected_row_visible() {
-        assert_eq!(tree_scroll_offset(4, 0), 0);
-        assert_eq!(tree_scroll_offset(4, 3), 0);
-        assert_eq!(tree_scroll_offset(4, 4), 1);
+    fn tree_max_scroll_stops_at_last_full_page() {
+        assert_eq!(tree_max_scroll(2, 4), 0);
+        assert_eq!(tree_max_scroll(4, 4), 0);
+        assert_eq!(tree_max_scroll(6, 4), 2);
+    }
+
+    #[test]
+    fn tree_scroll_offset_clamps_to_max_scroll() {
+        assert_eq!(tree_scroll_offset(4, 0, 6), 0);
+        assert_eq!(tree_scroll_offset(4, 1, 6), 1);
+        assert_eq!(tree_scroll_offset(4, 5, 6), 2);
     }
 
     #[test]
@@ -856,14 +886,15 @@ mod tests {
     }
 
     #[test]
-    fn tree_index_at_uses_scrolled_selection_as_origin() {
+    fn tree_index_at_uses_scrolled_view_as_origin() {
         let tmp = tempdir().expect("tmpdir should exist");
         std::fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
         std::fs::write(tmp.path().join("b.txt"), "b").expect("write should succeed");
         std::fs::write(tmp.path().join("c.txt"), "c").expect("write should succeed");
         let mut app =
             App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
-        app.tree.select_index(2);
+        app.set_tree_viewport_size(2);
+        app.handle_tree_wheel(Rect::new(0, 0, 20, 4), 1, 1, false);
         let area = Rect::new(0, 0, 20, 4);
 
         assert_eq!(tree_index_at(area, &app, 1, 1), Some(1));
@@ -933,6 +964,15 @@ mod tests {
         assert_eq!(tree_size_text(&dir), "-");
     }
 
+    #[test]
+    fn tree_name_text_shows_indent_and_marker_for_directory() {
+        let mut dir = sample_node("src", true, None, Some("2026-03-20"));
+        dir.depth = 2;
+        dir.is_expanded = true;
+
+        assert_eq!(tree_name_text(&dir), "    ▼ src/");
+    }
+
     fn sample_node(
         name: &str,
         is_dir: bool,
@@ -940,13 +980,14 @@ mod tests {
         modified_date: Option<&str>,
     ) -> DirEntryNode {
         DirEntryNode {
-            kind: DirEntryKind::Item,
             path: PathBuf::from(name),
             name: name.to_string(),
             is_dir,
             is_symlink: false,
             size_bytes,
             modified_date: modified_date.map(str::to_string),
+            depth: 0,
+            is_expanded: false,
         }
     }
 }

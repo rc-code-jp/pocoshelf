@@ -18,6 +18,7 @@ use crate::ui;
 const COPY_STATUS_DURATION: Duration = Duration::from_secs(3);
 const FS_REFRESH_DEBOUNCE: Duration = Duration::from_millis(300);
 const PREVIEW_WHEEL_SCROLL_AMOUNT: usize = 3;
+const TREE_WHEEL_SCROLL_AMOUNT: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusPane {
@@ -114,6 +115,8 @@ pub struct App {
     preferred_preview_mode: Option<PreviewRenderMode>,
     pending_fs_refresh: bool,
     last_fs_event_at: Option<Instant>,
+    tree_scroll: usize,
+    tree_viewport_height: usize,
     preview_viewport_height: usize,
     preview_viewport_width: usize,
 }
@@ -199,6 +202,8 @@ impl App {
             preferred_preview_mode: None,
             pending_fs_refresh: false,
             last_fs_event_at: None,
+            tree_scroll: 0,
+            tree_viewport_height: 1,
             preview_viewport_height: 1,
             preview_viewport_width: 1,
         };
@@ -232,6 +237,7 @@ impl App {
             Command::MoveUp => match self.focus {
                 FocusPane::Tree => {
                     self.tree.move_up();
+                    self.ensure_tree_selection_visible();
                     self.sync_preview();
                 }
                 FocusPane::Preview => self.scroll_preview_up(1),
@@ -239,16 +245,14 @@ impl App {
             Command::MoveDown => match self.focus {
                 FocusPane::Tree => {
                     self.tree.move_down();
+                    self.ensure_tree_selection_visible();
                     self.sync_preview();
                 }
                 FocusPane::Preview => self.scroll_preview_down(1),
             },
             Command::ExpandOrOpen => {
                 if self.focus == FocusPane::Tree {
-                    if self.tree.selected_is_parent_link() {
-                        self.tree.collapse_selected();
-                        self.sync_tree_state();
-                    } else if self.tree.selected_is_dir() {
+                    if self.tree.selected_is_dir() {
                         if let Err(err) = self.tree.expand_selected() {
                             self.status_message = format!("expand failed: {err}");
                         }
@@ -263,7 +267,7 @@ impl App {
                 if self.focus == FocusPane::Preview {
                     self.focus = FocusPane::Tree;
                 } else {
-                    self.tree.collapse_selected();
+                    let _ = self.tree.collapse_selected();
                     self.sync_tree_state();
                 }
             }
@@ -454,6 +458,24 @@ impl App {
         }
     }
 
+    pub fn handle_tree_wheel(
+        &mut self,
+        terminal_area: Rect,
+        column: u16,
+        row: u16,
+        scroll_up: bool,
+    ) {
+        if self.help.visible || !ui::tree_contains(terminal_area, self, column, row) {
+            return;
+        }
+
+        if scroll_up {
+            self.scroll_tree_up(TREE_WHEEL_SCROLL_AMOUNT);
+        } else {
+            self.scroll_tree_down(TREE_WHEEL_SCROLL_AMOUNT);
+        }
+    }
+
     fn sync_preview(&mut self) {
         self.preview = PreviewState::from_path(
             &self.startup_root,
@@ -570,8 +592,8 @@ impl App {
 
     pub fn tree_title(&self) -> String {
         format!(
-            "Dir: {} [{}]",
-            self.tree.current_dir.display(),
+            "Root: {} [{}]",
+            self.tree.root_label(),
             self.tree.mode.label()
         )
     }
@@ -582,6 +604,11 @@ impl App {
 
     pub fn is_preview_focused(&self) -> bool {
         self.focus == FocusPane::Preview
+    }
+
+    pub fn set_tree_viewport_size(&mut self, height: usize) {
+        self.tree_viewport_height = height.max(1);
+        self.clamp_tree_scroll();
     }
 
     pub fn set_preview_viewport_size(&mut self, width: usize, height: usize) {
@@ -606,6 +633,47 @@ impl App {
 
     fn preview_page_amount(&self) -> usize {
         self.preview_viewport_height.max(1)
+    }
+
+    pub fn tree_scroll(&self) -> usize {
+        self.tree_scroll
+    }
+
+    fn scroll_tree_up(&mut self, amount: usize) {
+        self.tree_scroll = self.tree_scroll.saturating_sub(amount);
+    }
+
+    fn scroll_tree_down(&mut self, amount: usize) {
+        self.tree_scroll = self.tree_scroll.saturating_add(amount);
+        self.clamp_tree_scroll();
+    }
+
+    fn clamp_tree_scroll(&mut self) {
+        let max_scroll = ui::tree_max_scroll(self.tree.entries.len(), self.tree_viewport_height);
+        self.tree_scroll = self.tree_scroll.min(max_scroll);
+    }
+
+    fn ensure_tree_selection_visible(&mut self) {
+        let selected = self.tree.selected_index();
+        if self.tree_viewport_height == 0 {
+            self.tree_scroll = 0;
+            return;
+        }
+
+        if selected < self.tree_scroll {
+            self.tree_scroll = selected;
+        } else {
+            let viewport_end = self
+                .tree_scroll
+                .saturating_add(self.tree_viewport_height.saturating_sub(1));
+            if selected > viewport_end {
+                self.tree_scroll = selected
+                    .saturating_add(1)
+                    .saturating_sub(self.tree_viewport_height);
+            }
+        }
+
+        self.clamp_tree_scroll();
     }
 
     fn scroll_preview_up(&mut self, amount: usize) {
@@ -646,6 +714,8 @@ impl App {
     }
 
     fn sync_tree_state(&mut self) {
+        self.clamp_tree_scroll();
+        self.ensure_tree_selection_visible();
         self.refresh_visible_ignored_paths();
         self.hovered_tree_index = self
             .hovered_tree_index
@@ -735,7 +805,7 @@ mod tests {
 
     use super::{
         format_relative_with_at, resolve_directory_to_open, App, AppEffect, Command,
-        FS_REFRESH_DEBOUNCE,
+        FS_REFRESH_DEBOUNCE, TREE_WHEEL_SCROLL_AMOUNT,
     };
 
     #[test]
@@ -965,6 +1035,106 @@ mod tests {
     }
 
     #[test]
+    fn tree_wheel_scrolls_down_by_three_lines_without_changing_selection() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        for index in 0..10 {
+            fs::write(tmp.path().join(format!("file-{index}.txt")), "x")
+                .expect("write should succeed");
+        }
+
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        app.set_tree_viewport_size(3);
+        let selected_before = app.tree.selected_index();
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        app.handle_tree_wheel(terminal_area, tree_area.x + 1, tree_area.y + 1, false);
+
+        assert_eq!(app.tree_scroll(), TREE_WHEEL_SCROLL_AMOUNT);
+        assert_eq!(app.tree.selected_index(), selected_before);
+    }
+
+    #[test]
+    fn tree_wheel_scroll_persists_after_viewport_recalculation() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        for index in 0..10 {
+            fs::write(tmp.path().join(format!("file-{index}.txt")), "x")
+                .expect("write should succeed");
+        }
+
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        app.set_tree_viewport_size(3);
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        app.handle_tree_wheel(terminal_area, tree_area.x + 1, tree_area.y + 1, false);
+        app.set_tree_viewport_size(3);
+
+        assert_eq!(app.tree_scroll(), TREE_WHEEL_SCROLL_AMOUNT);
+    }
+
+    #[test]
+    fn tree_wheel_scrolls_up_and_clamps_at_zero() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        for index in 0..10 {
+            fs::write(tmp.path().join(format!("file-{index}.txt")), "x")
+                .expect("write should succeed");
+        }
+
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        app.set_tree_viewport_size(3);
+        app.tree_scroll = 2;
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        app.handle_tree_wheel(terminal_area, tree_area.x + 1, tree_area.y + 1, true);
+
+        assert_eq!(app.tree_scroll(), 0);
+    }
+
+    #[test]
+    fn tree_wheel_ignores_non_tree_region() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        for index in 0..10 {
+            fs::write(tmp.path().join(format!("file-{index}.txt")), "x")
+                .expect("write should succeed");
+        }
+
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        app.set_tree_viewport_size(3);
+        let before_scroll = app.tree_scroll();
+        let terminal_area = Rect::new(0, 0, 20, 10);
+
+        app.handle_tree_wheel(terminal_area, 1, 9, false);
+
+        assert_eq!(app.tree_scroll(), before_scroll);
+    }
+
+    #[test]
+    fn tree_selection_scrolls_into_view_after_move_down() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        for index in 0..10 {
+            fs::write(tmp.path().join(format!("file-{index}.txt")), "x")
+                .expect("write should succeed");
+        }
+
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        app.set_tree_viewport_size(3);
+
+        for _ in 0..4 {
+            let _ = app.handle_command(Command::MoveDown);
+        }
+
+        assert_eq!(app.tree.selected_index(), 4);
+        assert_eq!(app.tree_scroll(), 2);
+    }
+
+    #[test]
     fn help_toggles_and_blocks_navigation_commands() {
         let tmp = tempdir().expect("tmpdir should exist");
         let mut app =
@@ -1114,7 +1284,13 @@ mod tests {
         fs::write(root.join("nested/ignored.log"), "skip").expect("ignored file should write");
 
         let mut app = App::new(root.to_path_buf(), TreeMode::Normal).expect("app should build");
-        select_by_file_name(&mut app, "nested");
+        let nested_index = app
+            .tree
+            .entries
+            .iter()
+            .position(|entry| entry.name == "nested")
+            .expect("nested should exist");
+        assert!(app.tree.select_index(nested_index));
         let _ = app.handle_command(Command::ExpandOrOpen);
 
         let ignored_file = root.join("nested/ignored.log");
@@ -1183,7 +1359,7 @@ mod tests {
     }
 
     #[test]
-    fn toggle_tree_mode_keeps_current_directory_when_changed_entries_exist() {
+    fn toggle_tree_mode_keeps_selected_directory_expanded_when_changed_entries_exist() {
         let tmp = tempdir().expect("tmpdir should exist");
         let root = tmp.path();
         let repo = Repository::init(root).expect("git init should succeed");
@@ -1196,15 +1372,22 @@ mod tests {
         select_by_file_name(&mut app, "src");
         let _ = app.handle_command(Command::ExpandOrOpen);
 
-        assert_eq!(app.tree.current_dir, root.join("src"));
+        assert!(app
+            .tree
+            .entries
+            .iter()
+            .any(|entry| entry.name == "src" && entry.is_expanded));
+        assert!(app.tree.entries.iter().any(|entry| entry.name == "nested"));
 
         let _ = app.handle_command(Command::ToggleTreeMode);
 
         assert_eq!(app.tree.mode, TreeMode::Changed);
-        assert_eq!(app.tree.current_dir, root.join("src"));
-        assert_eq!(app.tree.entries.len(), 2);
-        assert_eq!(app.tree.entries[0].name, "..");
-        assert_eq!(app.tree.entries[1].name, "nested");
+        assert!(app
+            .tree
+            .entries
+            .iter()
+            .any(|entry| entry.name == "src" && entry.is_expanded));
+        assert!(app.tree.entries.iter().any(|entry| entry.name == "nested"));
     }
 
     #[test]
@@ -1237,28 +1420,28 @@ mod tests {
         let effect = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 1);
 
         assert_eq!(effect, None);
-        assert_eq!(app.tree.current_dir, tmp.path().join("sub"));
         assert_eq!(app.tree.entries.len(), 2);
-        assert_eq!(app.tree.entries[0].name, "..");
+        assert_eq!(app.tree.entries[0].name, "sub");
+        assert!(app.tree.entries[0].is_expanded);
         assert_eq!(app.tree.entries[1].name, "note.txt");
         assert!(app.is_tree_focused());
     }
 
     #[test]
-    fn expand_or_open_on_parent_link_moves_back_to_parent_directory() {
+    fn collapse_moves_selection_back_to_parent_directory() {
         let tmp = tempdir().expect("tmpdir should exist");
         let root = tmp.path().join("root");
         fs::create_dir_all(root.join("sub")).expect("create dir should succeed");
+        fs::write(root.join("sub/file.txt"), "hello").expect("write should succeed");
 
         let mut app = App::new(root.clone(), TreeMode::Normal).expect("app should build");
         select_by_file_name(&mut app, "sub");
         let _ = app.handle_command(Command::ExpandOrOpen);
-        assert_eq!(app.tree.current_dir, root.join("sub"));
+        select_by_file_name(&mut app, "file.txt");
 
-        assert!(app.tree.select_index(0));
-        let _ = app.handle_command(Command::ExpandOrOpen);
+        let _ = app.handle_command(Command::Collapse);
 
-        assert_eq!(app.tree.current_dir, root);
+        assert_eq!(app.tree.selected_path(), root.join("sub").as_path());
     }
 
     #[test]

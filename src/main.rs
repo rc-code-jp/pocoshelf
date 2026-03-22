@@ -79,6 +79,9 @@ fn run(
     while !app.should_quit {
         app.poll_background_tasks();
         terminal.draw(|f| {
+            app.set_tree_viewport_size(
+                ui::tree_area(f.area(), &app).height.saturating_sub(2) as usize
+            );
             app.set_preview_viewport_size(
                 ui::preview_viewport_width(f.area(), &app),
                 ui::preview_viewport_height(f.area(), &app),
@@ -137,19 +140,49 @@ fn run(
                             }
                         }
                     } else if matches!(mouse_event.kind, MouseEventKind::ScrollUp) {
-                        app.handle_preview_wheel(
+                        if ui::tree_contains(
                             terminal_area,
+                            &app,
                             mouse_event.column,
                             mouse_event.row,
-                            true,
-                        );
+                        ) && !app.help.visible
+                        {
+                            app.handle_tree_wheel(
+                                terminal_area,
+                                mouse_event.column,
+                                mouse_event.row,
+                                true,
+                            );
+                        } else {
+                            app.handle_preview_wheel(
+                                terminal_area,
+                                mouse_event.column,
+                                mouse_event.row,
+                                true,
+                            );
+                        }
                     } else if matches!(mouse_event.kind, MouseEventKind::ScrollDown) {
-                        app.handle_preview_wheel(
+                        if ui::tree_contains(
                             terminal_area,
+                            &app,
                             mouse_event.column,
                             mouse_event.row,
-                            false,
-                        );
+                        ) && !app.help.visible
+                        {
+                            app.handle_tree_wheel(
+                                terminal_area,
+                                mouse_event.column,
+                                mouse_event.row,
+                                false,
+                            );
+                        } else {
+                            app.handle_preview_wheel(
+                                terminal_area,
+                                mouse_event.column,
+                                mouse_event.row,
+                                false,
+                            );
+                        }
                     } else if matches!(mouse_event.kind, MouseEventKind::Moved) {
                         app.update_tree_hover(terminal_area, mouse_event.column, mouse_event.row);
                     }
