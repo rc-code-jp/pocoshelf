@@ -15,6 +15,7 @@ use crate::tree::{Tree, TreeMode};
 use crate::ui;
 
 const COPY_STATUS_DURATION: Duration = Duration::from_secs(3);
+const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
 const FS_REFRESH_DEBOUNCE: Duration = Duration::from_millis(300);
 const HELP_WHEEL_SCROLL_AMOUNT: usize = 3;
 const TREE_WHEEL_SCROLL_AMOUNT: usize = 3;
@@ -96,8 +97,15 @@ pub struct App {
     pending_manual_refresh: bool,
     pending_fs_refresh: bool,
     last_fs_event_at: Option<Instant>,
+    last_left_click: Option<LastLeftClick>,
     tree_scroll: usize,
     tree_viewport_height: usize,
+}
+
+#[derive(Debug, Clone)]
+struct LastLeftClick {
+    path: PathBuf,
+    at: Instant,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -168,6 +176,7 @@ impl App {
             pending_manual_refresh: false,
             pending_fs_refresh: false,
             last_fs_event_at: None,
+            last_left_click: None,
             tree_scroll: 0,
             tree_viewport_height: 1,
         };
@@ -340,7 +349,25 @@ impl App {
         }
 
         self.ensure_tree_selection_visible();
-        self.handle_command(Command::ExpandOrOpen)
+        let selected_path = self.tree.selected_path().to_path_buf();
+        let now = Instant::now();
+
+        if self.tree.selected_is_dir() {
+            self.last_left_click = None;
+            return self.handle_command(Command::ExpandOrOpen);
+        }
+
+        if self.is_double_click_on_selected_file(&selected_path, now) {
+            self.copy_relative_path();
+            self.last_left_click = None;
+        } else {
+            self.last_left_click = Some(LastLeftClick {
+                path: selected_path,
+                at: now,
+            });
+        }
+
+        None
     }
 
     pub fn update_tree_hover(&mut self, terminal_area: Rect, column: u16, row: u16) {
@@ -418,6 +445,11 @@ impl App {
     }
 
     fn open_in_finder(&mut self) {
+        if !self.tree.selected_exists_on_disk() {
+            self.set_temporary_status("deleted entry selected; open skipped");
+            return;
+        }
+
         let selected = self.tree.selected_path();
         let target_dir = resolve_directory_to_open(selected);
 
@@ -438,6 +470,11 @@ impl App {
     fn open_in_vi(&mut self) -> Option<AppEffect> {
         if self.tree.selected_is_dir() {
             self.set_temporary_status("directory selected; vi skipped");
+            return None;
+        }
+
+        if !self.tree.selected_exists_on_disk() {
+            self.set_temporary_status("deleted entry selected; vi skipped");
             return None;
         }
 
@@ -571,6 +608,12 @@ impl App {
             self.status_expires_at = None;
         }
     }
+
+    fn is_double_click_on_selected_file(&self, path: &Path, now: Instant) -> bool {
+        self.last_left_click.as_ref().is_some_and(|last_click| {
+            last_click.path == path && now.duration_since(last_click.at) <= DOUBLE_CLICK_INTERVAL
+        })
+    }
 }
 
 pub fn format_relative_with_at(startup_root: &Path, selected: &Path) -> anyhow::Result<String> {
@@ -629,7 +672,7 @@ mod tests {
 
     use super::{
         format_relative_with_at, resolve_directory_to_open, App, AppEffect, Command,
-        FS_REFRESH_DEBOUNCE, TREE_WHEEL_SCROLL_AMOUNT,
+        DOUBLE_CLICK_INTERVAL, FS_REFRESH_DEBOUNCE, TREE_WHEEL_SCROLL_AMOUNT,
     };
 
     #[test]
@@ -795,6 +838,39 @@ mod tests {
     }
 
     #[test]
+    fn open_in_vi_skips_deleted_file_selection() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path();
+        let repo = Repository::init(root).expect("git init should succeed");
+        fs::write(root.join("gone.txt"), "hello").expect("write should succeed");
+        commit_all(&repo, "initial");
+        fs::remove_file(root.join("gone.txt")).expect("delete should succeed");
+
+        let mut app = App::new(root.to_path_buf(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "gone.txt");
+
+        let effect = app.handle_command(Command::OpenInVi);
+        assert_eq!(effect, None);
+        assert_eq!(app.status_message, "deleted entry selected; vi skipped");
+    }
+
+    #[test]
+    fn open_in_finder_skips_deleted_file_selection() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path();
+        let repo = Repository::init(root).expect("git init should succeed");
+        fs::write(root.join("gone.txt"), "hello").expect("write should succeed");
+        commit_all(&repo, "initial");
+        fs::remove_file(root.join("gone.txt")).expect("delete should succeed");
+
+        let mut app = App::new(root.to_path_buf(), TreeMode::Normal).expect("app should build");
+        select_by_file_name(&mut app, "gone.txt");
+
+        let _ = app.handle_command(Command::OpenInFinder);
+        assert_eq!(app.status_message, "deleted entry selected; open skipped");
+    }
+
+    #[test]
     fn resolve_directory_returns_parent_for_file() {
         let file = Path::new("/repo/docs/sample.txt");
         let out = resolve_directory_to_open(file);
@@ -936,6 +1012,84 @@ mod tests {
 
         assert_eq!(effect, None);
         assert_eq!(app.tree.selected_path(), tmp.path().join("b.txt").as_path());
+        assert_eq!(app.status_message, "ready");
+    }
+
+    #[test]
+    fn tree_double_click_copies_selected_file() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        fs::write(tmp.path().join("b.txt"), "b").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        app.clipboard = None;
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        let _ = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 2);
+        let effect = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 2);
+
+        assert_eq!(effect, None);
+        assert_eq!(app.status_message, "clipboard unavailable");
+    }
+
+    #[test]
+    fn tree_click_outside_double_click_window_does_not_copy() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        fs::write(tmp.path().join("b.txt"), "b").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        let _ = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 2);
+        if let Some(last_click) = app.last_left_click.as_mut() {
+            last_click.at -= DOUBLE_CLICK_INTERVAL + Duration::from_millis(1);
+        }
+        let _ = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 2);
+
+        assert_eq!(app.status_message, "ready");
+    }
+
+    #[test]
+    fn tree_click_on_different_file_does_not_copy() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        fs::write(tmp.path().join("b.txt"), "b").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        let _ = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 1);
+        let _ = app.handle_tree_left_click(terminal_area, tree_area.x + 1, tree_area.y + 2);
+
+        assert_eq!(app.status_message, "ready");
+        assert_eq!(app.tree.selected_path(), tmp.path().join("b.txt").as_path());
+    }
+
+    #[test]
+    fn tree_double_click_copies_deleted_file() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path();
+        let repo = Repository::init(root).expect("git init should succeed");
+        fs::write(root.join("gone.txt"), "hello").expect("write should succeed");
+        commit_all(&repo, "initial");
+        fs::remove_file(root.join("gone.txt")).expect("delete should succeed");
+
+        let mut app = App::new(root.to_path_buf(), TreeMode::Normal).expect("app should build");
+        app.clipboard = None;
+        select_by_file_name(&mut app, "gone.txt");
+        let index = app.tree.selected_index();
+        let terminal_area = Rect::new(0, 0, 20, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+        let row = tree_area.y + 1 + index as u16;
+
+        let _ = app.handle_tree_left_click(terminal_area, tree_area.x + 1, row);
+        let _ = app.handle_tree_left_click(terminal_area, tree_area.x + 1, row);
+
+        assert_eq!(app.status_message, "clipboard unavailable");
     }
 
     #[test]

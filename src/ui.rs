@@ -358,10 +358,8 @@ fn help_content(language: HelpLanguage) -> (&'static str, Vec<Line<'static>>) {
             lines.extend(help_entry("j / k, Down / Up", "Move selection"));
             lines.extend(help_entry("h / Left", "Collapse dir or move to parent"));
             lines.extend(help_entry("l / Right / Enter", "Toggle selected directory"));
-            lines.extend(help_entry(
-                "Left click",
-                "Select row and toggle directories",
-            ));
+            lines.extend(help_entry("Left click", "Select files, toggle directories"));
+            lines.extend(help_entry("Double click file", "Copy @-relative path"));
             lines.extend(help_entry("Mouse wheel on tree", "Scroll tree by 3 lines"));
             lines.extend(help_blank());
             lines.extend(help_section("General"));
@@ -387,7 +385,14 @@ fn help_content(language: HelpLanguage) -> (&'static str, Vec<Line<'static>>) {
                 "ディレクトリを閉じる、または親へ移動",
             ));
             lines.extend(help_entry("l / Right / Enter", "選択ディレクトリを開閉"));
-            lines.extend(help_entry("左クリック", "行を選択し、ディレクトリなら開閉"));
+            lines.extend(help_entry(
+                "左クリック",
+                "ファイルを選択し、ディレクトリなら開閉",
+            ));
+            lines.extend(help_entry(
+                "ファイルをダブルクリック",
+                "@ 付き相対パスをコピー",
+            ));
             lines.extend(help_entry("ツリー上のマウスホイール", "3行ずつスクロール"));
             lines.extend(help_blank());
             lines.extend(help_section("一般"));
@@ -654,6 +659,7 @@ mod tests {
             name: name.to_string(),
             is_dir,
             is_symlink: false,
+            exists_on_disk: true,
             size_bytes,
             modified_date: modified_date.map(str::to_string),
             depth: 0,
