@@ -2,7 +2,6 @@ mod app;
 mod config;
 mod git_status;
 mod input;
-mod preview;
 mod tree;
 mod ui;
 
@@ -82,10 +81,6 @@ fn run(
             app.set_tree_viewport_size(
                 ui::tree_area(f.area(), &app).height.saturating_sub(2) as usize
             );
-            app.set_preview_viewport_size(
-                ui::preview_viewport_width(f.area(), &app),
-                ui::preview_viewport_height(f.area(), &app),
-            );
             app.set_help_viewport_size(
                 ui::help_viewport_width(f.area()),
                 ui::help_viewport_height(f.area()),
@@ -140,49 +135,19 @@ fn run(
                             }
                         }
                     } else if matches!(mouse_event.kind, MouseEventKind::ScrollUp) {
-                        if ui::tree_contains(
+                        app.handle_mouse_wheel(
                             terminal_area,
-                            &app,
                             mouse_event.column,
                             mouse_event.row,
-                        ) && !app.help.visible
-                        {
-                            app.handle_tree_wheel(
-                                terminal_area,
-                                mouse_event.column,
-                                mouse_event.row,
-                                true,
-                            );
-                        } else {
-                            app.handle_preview_wheel(
-                                terminal_area,
-                                mouse_event.column,
-                                mouse_event.row,
-                                true,
-                            );
-                        }
+                            true,
+                        );
                     } else if matches!(mouse_event.kind, MouseEventKind::ScrollDown) {
-                        if ui::tree_contains(
+                        app.handle_mouse_wheel(
                             terminal_area,
-                            &app,
                             mouse_event.column,
                             mouse_event.row,
-                        ) && !app.help.visible
-                        {
-                            app.handle_tree_wheel(
-                                terminal_area,
-                                mouse_event.column,
-                                mouse_event.row,
-                                false,
-                            );
-                        } else {
-                            app.handle_preview_wheel(
-                                terminal_area,
-                                mouse_event.column,
-                                mouse_event.row,
-                                false,
-                            );
-                        }
+                            false,
+                        );
                     } else if matches!(mouse_event.kind, MouseEventKind::Moved) {
                         app.update_tree_hover(terminal_area, mouse_event.column, mouse_event.row);
                     }

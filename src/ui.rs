@@ -7,9 +7,6 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::config::HelpLanguage;
 use crate::git_status::GitState;
-use crate::preview::PreviewKind;
-use crate::preview::PreviewRenderMode;
-use crate::preview::PreviewState;
 use crate::tree::DirEntryNode;
 
 const TREE_COLUMN_GAP: usize = 2;
@@ -19,50 +16,23 @@ const TREE_MIN_NAME_WIDTH: usize = 12;
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let outer = outer_layout(frame.area());
 
-    let body = body_layout(outer[0], app);
-
-    render_tree(frame, app, body[0]);
-    render_preview(frame, app, body[1]);
+    render_tree(frame, app, outer[0]);
     render_status(frame, app, outer[1]);
     if app.help.visible {
         render_help(frame, app, frame.area());
     }
 }
 
-pub fn preview_viewport_height(area: Rect, app: &App) -> usize {
-    let outer = outer_layout(area);
-    let body = body_layout(outer[0], app);
-    body[1].height.saturating_sub(2) as usize
-}
-
-pub fn preview_viewport_width(area: Rect, app: &App) -> usize {
-    let outer = outer_layout(area);
-    let body = body_layout(outer[0], app);
-    body[1].width.saturating_sub(2) as usize
-}
-
-pub fn preview_area(area: Rect, app: &App) -> Rect {
-    let outer = outer_layout(area);
-    let body = body_layout(outer[0], app);
-    body[1]
-}
-
 pub fn help_area(area: Rect) -> Rect {
     centered_rect(76, 80, area)
 }
 
-pub fn tree_area(area: Rect, app: &App) -> Rect {
-    let outer = outer_layout(area);
-    let body = body_layout(outer[0], app);
-    body[0]
+pub fn tree_area(area: Rect, _app: &App) -> Rect {
+    outer_layout(area)[0]
 }
 
 pub fn tree_contains(area: Rect, app: &App, column: u16, row: u16) -> bool {
     tree_area(area, app).contains(ratatui::layout::Position { x: column, y: row })
-}
-
-pub fn preview_contains(area: Rect, app: &App, column: u16, row: u16) -> bool {
-    preview_area(area, app).contains(ratatui::layout::Position { x: column, y: row })
 }
 
 pub fn help_contains(area: Rect, column: u16, row: u16) -> bool {
@@ -75,41 +45,6 @@ pub fn help_viewport_height(area: Rect) -> usize {
 
 pub fn help_viewport_width(area: Rect) -> usize {
     help_area(area).width.saturating_sub(2) as usize
-}
-
-pub fn preview_max_scroll(
-    preview: &PreviewState,
-    viewport_height: usize,
-    inner_width: usize,
-) -> usize {
-    if viewport_height == 0 || inner_width == 0 || preview.lines.is_empty() {
-        return 0;
-    }
-
-    let visual_line_counts: Vec<usize> = match preview.kind {
-        PreviewKind::Directory => vec![1; preview.lines.len()],
-        PreviewKind::Text | PreviewKind::Message => {
-            let line_no_width = preview.lines.len().max(1).to_string().len().max(3);
-            preview
-                .lines
-                .iter()
-                .enumerate()
-                .map(|(index, line)| {
-                    preview_visual_line_count(index + 1, line, line_no_width, inner_width)
-                })
-                .collect()
-        }
-    };
-
-    let mut visual_lines_from_end = 0usize;
-    for (index, count) in visual_line_counts.iter().enumerate().rev() {
-        visual_lines_from_end = visual_lines_from_end.saturating_add(*count);
-        if visual_lines_from_end >= viewport_height {
-            return index;
-        }
-    }
-
-    0
 }
 
 pub fn tree_max_scroll(entry_count: usize, viewport_height: usize) -> usize {
@@ -162,31 +97,6 @@ fn outer_layout(area: Rect) -> std::rc::Rc<[Rect]> {
         .split(area)
 }
 
-fn body_layout(area: Rect, app: &App) -> std::rc::Rc<[Rect]> {
-    let tree_ratio = if app.is_preview_focused() {
-        app.config.layout.tree_ratio_preview_focused
-    } else {
-        app.config.layout.tree_ratio_normal
-    };
-    let min_pane_height = if area.height >= 6 { 3 } else { 1 };
-    let max_tree_height = area.height.saturating_sub(min_pane_height);
-    let mut tree_height = ((u32::from(area.height) * u32::from(tree_ratio)) / 100) as u16;
-
-    tree_height = tree_height.clamp(min_pane_height, max_tree_height);
-    let preview_height = area.height.saturating_sub(tree_height);
-
-    vec![
-        Rect::new(area.x, area.y, area.width, tree_height),
-        Rect::new(
-            area.x,
-            area.y.saturating_add(tree_height),
-            area.width,
-            preview_height,
-        ),
-    ]
-    .into()
-}
-
 fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let viewport_height = area.height.saturating_sub(2) as usize;
     let inner_width = area.width.saturating_sub(2) as usize;
@@ -226,124 +136,14 @@ fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
         lines.push(Line::from(Span::raw(blank.clone())));
     }
 
-    let mut block = Block::default()
-        .title(app.tree_title())
-        .borders(Borders::ALL);
-    if app.is_tree_focused() {
-        block = block.border_style(Style::default().fg(Color::Cyan));
-    }
-    let tree = Paragraph::new(lines).block(block);
+    let tree = Paragraph::new(lines).block(
+        Block::default()
+            .title(app.tree_title())
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
     frame.render_widget(Clear, area);
     frame.render_widget(tree, area);
-}
-
-fn render_preview(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let height = area.height.saturating_sub(2) as usize;
-    let inner_width = area.width.saturating_sub(2) as usize;
-    let start = app
-        .preview
-        .scroll
-        .min(app.preview.lines.len().saturating_sub(1));
-
-    let mut lines: Vec<Line<'_>> = Vec::with_capacity(height);
-    let line_no_width = app.preview.lines.len().max(1).to_string().len().max(3);
-    for absolute_index in start..app.preview.lines.len() {
-        if lines.len() >= height {
-            break;
-        }
-
-        let line = &app.preview.lines[absolute_index];
-        match app.preview.kind {
-            PreviewKind::Directory => {
-                let entry = &app.preview.directory_entries[absolute_index];
-                let style = style_for_git(app.selected_git_state(&entry.path, entry.is_dir));
-                let padded = format!("{:<width$}", line, width = inner_width);
-                lines.push(Line::from(Span::styled(padded, style)));
-            }
-            PreviewKind::Text | PreviewKind::Message => {
-                let style = match app.preview.render_mode {
-                    PreviewRenderMode::Diff => {
-                        style_for_diff_line(app.preview.is_changed_line(absolute_index))
-                    }
-                    PreviewRenderMode::Raw => Style::default(),
-                };
-
-                for visual_line in
-                    wrap_numbered_preview_line(absolute_index + 1, line, line_no_width, inner_width)
-                {
-                    if lines.len() >= height {
-                        break;
-                    }
-                    lines.push(Line::from(Span::styled(visual_line, style)));
-                }
-            }
-        }
-    }
-
-    let blank = " ".repeat(inner_width);
-    while lines.len() < height {
-        lines.push(Line::from(Span::raw(blank.clone())));
-    }
-
-    let mut block = Block::default()
-        .title(app.preview_title())
-        .borders(Borders::ALL);
-    if app.is_preview_focused() {
-        block = block.border_style(Style::default().fg(Color::Cyan));
-    }
-    let preview = Paragraph::new(lines).block(block);
-    frame.render_widget(Clear, area);
-    frame.render_widget(preview, area);
-}
-
-fn wrap_numbered_preview_line(
-    line_number: usize,
-    line: &str,
-    line_no_width: usize,
-    inner_width: usize,
-) -> Vec<String> {
-    if inner_width == 0 {
-        return Vec::new();
-    }
-
-    let prefix = format!(
-        "{:>line_no_width$} | ",
-        line_number,
-        line_no_width = line_no_width
-    );
-    let continuation_prefix = format!("{:>line_no_width$} | ", "", line_no_width = line_no_width);
-
-    if inner_width <= prefix.len() {
-        return vec![truncate_to_width(&prefix, inner_width)];
-    }
-
-    let content_width = inner_width - prefix.len();
-    let sanitized = line.replace('\t', "    ");
-    let wrapped_content = wrap_text_chunks(&sanitized, content_width);
-    let mut visual_lines = Vec::with_capacity(wrapped_content.len().max(1));
-
-    for (index, chunk) in wrapped_content.iter().enumerate() {
-        let current_prefix = if index == 0 {
-            prefix.as_str()
-        } else {
-            continuation_prefix.as_str()
-        };
-        let combined = format!("{current_prefix}{chunk}");
-        visual_lines.push(format!("{combined:<width$}", width = inner_width));
-    }
-
-    visual_lines
-}
-
-fn preview_visual_line_count(
-    line_number: usize,
-    line: &str,
-    line_no_width: usize,
-    inner_width: usize,
-) -> usize {
-    wrap_numbered_preview_line(line_number, line, line_no_width, inner_width)
-        .len()
-        .max(1)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -493,27 +293,6 @@ fn tree_meta_style(is_selected: bool) -> Style {
     style
 }
 
-fn wrap_text_chunks(text: &str, width: usize) -> Vec<String> {
-    if width == 0 {
-        return vec![String::new()];
-    }
-
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-
-    let chars: Vec<char> = text.chars().collect();
-    let mut chunks = Vec::new();
-    let mut start = 0;
-    while start < chars.len() {
-        let end = (start + width).min(chars.len());
-        chunks.push(chars[start..end].iter().collect());
-        start = end;
-    }
-
-    chunks
-}
-
 fn truncate_to_width(text: &str, width: usize) -> String {
     text.chars().take(width).collect()
 }
@@ -538,16 +317,6 @@ fn render_status(frame: &mut Frame<'_>, app: &App, area: Rect) {
         Style::default().fg(Color::DarkGray),
     ));
     frame.render_widget(Paragraph::new(line), area);
-}
-
-fn style_for_diff_line(changed: bool) -> Style {
-    if !changed {
-        return Style::default().fg(Color::DarkGray);
-    }
-
-    Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD)
 }
 
 fn style_for_git(state: GitState) -> Style {
@@ -586,39 +355,14 @@ fn help_content(language: HelpLanguage) -> (&'static str, Vec<Line<'static>>) {
         HelpLanguage::En => {
             let mut lines = Vec::new();
             lines.extend(help_section("Navigation"));
-            lines.extend(help_entry(
-                "j / k, Down / Up",
-                "Move selection or scroll preview",
-            ));
-            lines.extend(help_entry(
-                "h / Left",
-                "Collapse dir, move to parent, or move focus back to tree",
-            ));
-            lines.extend(help_entry(
-                "l / Right / Enter",
-                "Toggle dir or open file preview",
-            ));
+            lines.extend(help_entry("j / k, Down / Up", "Move selection"));
+            lines.extend(help_entry("h / Left", "Collapse dir or move to parent"));
+            lines.extend(help_entry("l / Right / Enter", "Toggle selected directory"));
             lines.extend(help_entry(
                 "Left click",
-                "Same as Right / Enter in the tree",
+                "Select row and toggle directories",
             ));
-            lines.extend(help_entry(
-                "Top tree area click",
-                "Click from preview to focus tree",
-            ));
-            lines.extend(help_blank());
-            lines.extend(help_section("Preview"));
-            lines.extend(help_entry("Ctrl+u / Ctrl+d", "Half-page preview scroll"));
-            lines.extend(help_entry("PageUp / PageDown", "Full-page preview scroll"));
-            lines.extend(help_entry(
-                "Mouse wheel on preview",
-                "Scroll preview by 3 lines",
-            ));
-            lines.extend(help_entry("p", "Toggle preview mode (raw <-> diff)"));
-            lines.extend(help_entry(
-                "n / N",
-                "Jump to next / previous change in diff mode",
-            ));
+            lines.extend(help_entry("Mouse wheel on tree", "Scroll tree by 3 lines"));
             lines.extend(help_blank());
             lines.extend(help_section("General"));
             lines.extend(help_entry("Tab", "Toggle tree mode (normal <-> changed)"));
@@ -637,36 +381,14 @@ fn help_content(language: HelpLanguage) -> (&'static str, Vec<Line<'static>>) {
         HelpLanguage::Ja => {
             let mut lines = Vec::new();
             lines.extend(help_section("ナビゲーション"));
-            lines.extend(help_entry(
-                "j / k, Down / Up",
-                "選択を移動、またはプレビューをスクロール",
-            ));
+            lines.extend(help_entry("j / k, Down / Up", "選択を移動"));
             lines.extend(help_entry(
                 "h / Left",
-                "ディレクトリを閉じる、親へ移動する、またはツリーへ戻る",
+                "ディレクトリを閉じる、または親へ移動",
             ));
-            lines.extend(help_entry(
-                "l / Right / Enter",
-                "ディレクトリを開閉する、またはファイルをプレビュー",
-            ));
-            lines.extend(help_entry(
-                "左クリック",
-                "ツリーでは Right / Enter と同じ動作",
-            ));
-            lines.extend(help_entry(
-                "上部ツリー領域をクリック",
-                "プレビュー中にツリーへ戻る",
-            ));
-            lines.extend(help_blank());
-            lines.extend(help_section("プレビュー"));
-            lines.extend(help_entry("Ctrl+u / Ctrl+d", "半ページ分スクロール"));
-            lines.extend(help_entry("PageUp / PageDown", "1ページ分スクロール"));
-            lines.extend(help_entry(
-                "プレビュー上のマウスホイール",
-                "3行ずつスクロール",
-            ));
-            lines.extend(help_entry("p", "表示モード切り替え (raw <-> diff)"));
-            lines.extend(help_entry("n / N", "diff モードで次 / 前の変更へ移動"));
+            lines.extend(help_entry("l / Right / Enter", "選択ディレクトリを開閉"));
+            lines.extend(help_entry("左クリック", "行を選択し、ディレクトリなら開閉"));
+            lines.extend(help_entry("ツリー上のマウスホイール", "3行ずつスクロール"));
             lines.extend(help_blank());
             lines.extend(help_section("一般"));
             lines.extend(help_entry(
@@ -750,34 +472,19 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 mod tests {
     use std::path::PathBuf;
 
+    use ratatui::style::{Color, Modifier, Style};
+    use ratatui::text::{Line, Span};
+    use tempfile::tempdir;
+
     use super::{
-        format_bytes, help_entry, help_max_scroll, preview_area, preview_contains,
-        preview_max_scroll, tree_area, tree_columns, tree_contains, tree_index_at, tree_max_scroll,
-        tree_name_text, tree_scroll_offset, tree_size_text, wrap_numbered_preview_line,
+        format_bytes, help_entry, help_max_scroll, tree_area, tree_columns, tree_contains,
+        tree_index_at, tree_max_scroll, tree_name_text, tree_scroll_offset, tree_size_text,
         DirEntryNode,
     };
     use crate::app::App;
     use crate::config::HelpLanguage;
     use crate::tree::TreeMode;
     use ratatui::layout::Rect;
-    use ratatui::style::{Color, Modifier, Style};
-    use ratatui::text::Line;
-    use ratatui::text::Span;
-    use tempfile::tempdir;
-
-    #[test]
-    fn wrap_numbered_preview_line_keeps_line_number_only_on_first_visual_line() {
-        let lines = wrap_numbered_preview_line(12, "abcdefghijkl", 3, 10);
-
-        assert_eq!(lines, vec![" 12 | abcd", "    | efgh", "    | ijkl"]);
-    }
-
-    #[test]
-    fn wrap_numbered_preview_line_expands_tabs_before_wrapping() {
-        let lines = wrap_numbered_preview_line(1, "\ta", 3, 10);
-
-        assert_eq!(lines, vec!["  1 |     ", "    | a   "]);
-    }
 
     #[test]
     fn help_entry_uses_two_lines() {
@@ -799,7 +506,6 @@ mod tests {
     #[test]
     fn help_max_scroll_grows_when_viewport_is_short() {
         let max_scroll = help_max_scroll(HelpLanguage::En, 4, 24);
-
         assert!(max_scroll > 0);
     }
 
@@ -894,7 +600,7 @@ mod tests {
         let mut app =
             App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
         app.set_tree_viewport_size(2);
-        app.handle_tree_wheel(Rect::new(0, 0, 20, 4), 1, 1, false);
+        app.handle_mouse_wheel(Rect::new(0, 0, 20, 4), 1, 1, false);
         let area = Rect::new(0, 0, 20, 4);
 
         assert_eq!(tree_index_at(area, &app, 1, 1), Some(1));
@@ -913,42 +619,6 @@ mod tests {
         assert!(tree_contains(area, &app, tree.x + 10, tree.y));
         assert!(tree_contains(area, &app, tree.x + 1, tree.bottom() - 1));
         assert!(!tree_contains(area, &app, 25, 1));
-    }
-
-    #[test]
-    fn preview_contains_accepts_preview_region_only() {
-        let tmp = tempdir().expect("tmpdir should exist");
-        std::fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
-        let mut app =
-            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
-        app.focus = crate::app::FocusPane::Preview;
-        let area = Rect::new(0, 0, 20, 10);
-        let preview = preview_area(area, &app);
-
-        assert!(preview_contains(area, &app, preview.x, preview.y));
-        assert!(preview_contains(
-            area,
-            &app,
-            preview.x + 1,
-            preview.bottom() - 1
-        ));
-        assert!(!preview_contains(area, &app, 1, 1));
-    }
-
-    #[test]
-    fn preview_max_scroll_stops_at_last_full_text_page() {
-        let mut preview = crate::preview::PreviewState::message("placeholder");
-        preview.lines = vec!["1".into(), "2".into(), "3".into(), "4".into()];
-
-        assert_eq!(preview_max_scroll(&preview, 3, 20), 1);
-    }
-
-    #[test]
-    fn preview_max_scroll_accounts_for_wrapped_lines() {
-        let mut preview = crate::preview::PreviewState::message("placeholder");
-        preview.lines = vec!["z".into(), "abcdefghijkl".into()];
-
-        assert_eq!(preview_max_scroll(&preview, 2, 10), 1);
     }
 
     #[test]
