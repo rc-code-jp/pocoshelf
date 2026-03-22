@@ -100,6 +100,14 @@ impl GitSnapshot {
             .collect()
     }
 
+    pub fn deleted_file_paths(&self) -> Vec<PathBuf> {
+        self.file_states
+            .iter()
+            .filter(|(_, state)| **state == GitState::Deleted)
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+
     fn insert_file_state(&mut self, path: PathBuf, state: GitState, startup_root: &Path) {
         let existing = self
             .file_states

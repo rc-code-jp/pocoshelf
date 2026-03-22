@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::ValueEnum;
@@ -29,6 +30,7 @@ pub struct DirEntryNode {
     pub name: String,
     pub is_dir: bool,
     pub is_symlink: bool,
+    pub exists_on_disk: bool,
     pub size_bytes: Option<u64>,
     pub modified_date: Option<String>,
     pub depth: usize,
@@ -42,6 +44,7 @@ pub struct Tree {
     pub mode: TreeMode,
     selected: usize,
     changed_paths: HashSet<PathBuf>,
+    deleted_paths: HashSet<PathBuf>,
     expanded_dirs: HashSet<PathBuf>,
 }
 
@@ -55,7 +58,8 @@ impl Tree {
             entries: Vec::new(),
             mode,
             selected: 0,
-            changed_paths: collect_existing_changed_paths(git, mode),
+            changed_paths: collect_changed_paths(git, mode),
+            deleted_paths: collect_deleted_paths(git),
             expanded_dirs,
         };
         tree.reload_entries(None)?;
@@ -116,13 +120,15 @@ impl Tree {
 
     pub fn set_mode(&mut self, mode: TreeMode, git: &GitSnapshot) -> anyhow::Result<()> {
         self.mode = mode;
-        self.changed_paths = collect_existing_changed_paths(git, mode);
+        self.changed_paths = collect_changed_paths(git, mode);
+        self.deleted_paths = collect_deleted_paths(git);
         let preferred = self.selected_path().to_path_buf();
         self.reload_entries(Some(&preferred))
     }
 
     pub fn update_changed_paths(&mut self, git: &GitSnapshot) -> anyhow::Result<()> {
-        self.changed_paths = collect_existing_changed_paths(git, self.mode);
+        self.changed_paths = collect_changed_paths(git, self.mode);
+        self.deleted_paths = collect_deleted_paths(git);
         let preferred = self.selected_path().to_path_buf();
         self.reload_entries(Some(&preferred))
     }
@@ -166,16 +172,36 @@ impl Tree {
             .unwrap_or(false)
     }
 
+    pub fn selected_exists_on_disk(&self) -> bool {
+        self.entries
+            .get(self.selected)
+            .map(|entry| entry.exists_on_disk)
+            .unwrap_or(true)
+    }
+
     pub fn root_label(&self) -> String {
         self.startup_root.display().to_string()
     }
 
     fn reload_entries(&mut self, prefer_selected_path: Option<&Path>) -> anyhow::Result<()> {
-        self.expanded_dirs
-            .retain(|path| path == &self.startup_root || path.exists());
+        let deleted_paths = &self.deleted_paths;
+        self.expanded_dirs.retain(|path| {
+            path == &self.startup_root
+                || path.exists()
+                || deleted_paths
+                    .iter()
+                    .any(|deleted| deleted.starts_with(path))
+        });
 
         let preferred = prefer_selected_path
-            .filter(|path| path.starts_with(&self.startup_root) && path.exists())
+            .filter(|path| {
+                path.starts_with(&self.startup_root)
+                    && (path.exists()
+                        || self
+                            .deleted_paths
+                            .iter()
+                            .any(|deleted| deleted == *path || deleted.starts_with(path)))
+            })
             .map(Path::to_path_buf);
 
         if let Some(path) = preferred.as_deref() {
@@ -198,8 +224,13 @@ impl Tree {
         depth: usize,
         out: &mut Vec<DirEntryNode>,
     ) -> anyhow::Result<()> {
-        let mut children =
-            read_directory_entries(dir, self.mode, &self.changed_paths, &self.startup_root)?;
+        let mut children = read_directory_entries(
+            dir,
+            self.mode,
+            &self.changed_paths,
+            &self.deleted_paths,
+            &self.startup_root,
+        )?;
 
         children.sort_by(compare_entries);
 
@@ -254,47 +285,117 @@ fn read_directory_entries(
     dir: &Path,
     mode: TreeMode,
     changed_paths: &HashSet<PathBuf>,
+    deleted_paths: &HashSet<PathBuf>,
     startup_root: &Path,
 ) -> anyhow::Result<Vec<DirEntryNode>> {
-    let read_dir = fs::read_dir(dir)?;
     let mut entries = Vec::new();
 
-    for entry_res in read_dir {
-        let entry = match entry_res {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
+    if dir.exists() {
+        let read_dir = fs::read_dir(dir)?;
+        for entry_res in read_dir {
+            let entry = match entry_res {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
 
-        let path = entry.path();
-        if !path.starts_with(startup_root) {
-            continue;
+            let path = entry.path();
+            if !path.starts_with(startup_root) {
+                continue;
+            }
+
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+
+            let is_dir = file_type.is_dir();
+            if mode == TreeMode::Changed && !is_changed_visible(&path, is_dir, changed_paths) {
+                continue;
+            }
+
+            let name = entry.file_name().to_string_lossy().to_string();
+            let (size_bytes, modified_date) = load_entry_metadata(&entry, is_dir);
+            entries.push(DirEntryNode {
+                path,
+                name,
+                is_dir,
+                is_symlink: file_type.is_symlink(),
+                exists_on_disk: true,
+                size_bytes,
+                modified_date,
+                depth: 0,
+                is_expanded: false,
+            });
         }
-
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(_) => continue,
-        };
-
-        let is_dir = file_type.is_dir();
-        if mode == TreeMode::Changed && !is_changed_visible(&path, is_dir, changed_paths) {
-            continue;
-        }
-
-        let name = entry.file_name().to_string_lossy().to_string();
-        let (size_bytes, modified_date) = load_entry_metadata(&entry, is_dir);
-        entries.push(DirEntryNode {
-            path,
-            name,
-            is_dir,
-            is_symlink: file_type.is_symlink(),
-            size_bytes,
-            modified_date,
-            depth: 0,
-            is_expanded: false,
-        });
     }
 
+    entries.extend(collect_deleted_entries(
+        dir,
+        mode,
+        changed_paths,
+        deleted_paths,
+        startup_root,
+    ));
+
     Ok(entries)
+}
+
+fn collect_deleted_entries(
+    dir: &Path,
+    mode: TreeMode,
+    changed_paths: &HashSet<PathBuf>,
+    deleted_paths: &HashSet<PathBuf>,
+    startup_root: &Path,
+) -> Vec<DirEntryNode> {
+    let mut synthetic_entries = BTreeMap::new();
+
+    for deleted_path in deleted_paths {
+        if !deleted_path.starts_with(dir) || deleted_path == dir {
+            continue;
+        }
+
+        let Ok(relative) = deleted_path.strip_prefix(dir) else {
+            continue;
+        };
+        let mut components = relative.components();
+        let Some(first) = components.next() else {
+            continue;
+        };
+        let Component::Normal(name) = first else {
+            continue;
+        };
+
+        let child_path = dir.join(name);
+        if !child_path.starts_with(startup_root) || child_path.exists() {
+            continue;
+        }
+
+        let is_dir = components.next().is_some();
+        if mode == TreeMode::Changed && !is_changed_visible(&child_path, is_dir, changed_paths) {
+            continue;
+        }
+
+        synthetic_entries
+            .entry(child_path.clone())
+            .and_modify(|existing: &mut DirEntryNode| {
+                if is_dir {
+                    existing.is_dir = true;
+                }
+            })
+            .or_insert_with(|| DirEntryNode {
+                path: child_path,
+                name: name.to_string_lossy().to_string(),
+                is_dir,
+                is_symlink: false,
+                exists_on_disk: false,
+                size_bytes: None,
+                modified_date: None,
+                depth: 0,
+                is_expanded: false,
+            });
+    }
+
+    synthetic_entries.into_values().collect()
 }
 
 fn default_selected_index(entries: &[DirEntryNode]) -> usize {
@@ -356,15 +457,16 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
-fn collect_existing_changed_paths(git: &GitSnapshot, mode: TreeMode) -> HashSet<PathBuf> {
+fn collect_changed_paths(git: &GitSnapshot, mode: TreeMode) -> HashSet<PathBuf> {
     if mode != TreeMode::Changed {
         return HashSet::new();
     }
 
-    git.changed_file_paths()
-        .into_iter()
-        .filter(|path| path.exists())
-        .collect()
+    git.changed_file_paths().into_iter().collect()
+}
+
+fn collect_deleted_paths(git: &GitSnapshot) -> HashSet<PathBuf> {
+    git.deleted_file_paths().into_iter().collect()
 }
 
 #[cfg(test)]
@@ -549,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn changed_mode_excludes_deleted_entries_without_worktree_file() {
+    fn changed_mode_shows_deleted_entries_without_worktree_file() {
         let tmp = tempdir().expect("tmpdir should exist");
         let root = tmp.path();
         let repo = Repository::init(root).expect("git init should succeed");
@@ -561,7 +663,65 @@ mod tests {
         let tree =
             Tree::new(root.to_path_buf(), TreeMode::Changed, &git).expect("tree should build");
 
-        assert!(tree.entries.is_empty());
+        let deleted = tree
+            .entries
+            .iter()
+            .find(|entry| entry.name == "gone.txt")
+            .expect("gone.txt should exist");
+        assert!(!deleted.exists_on_disk);
+    }
+
+    #[test]
+    fn normal_mode_shows_deleted_entries_without_worktree_file() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path();
+        let repo = Repository::init(root).expect("git init should succeed");
+        fs::write(root.join("gone.txt"), "v1").expect("file should write");
+        commit_all(&repo, "initial");
+        fs::remove_file(root.join("gone.txt")).expect("file should delete");
+
+        let git = GitSnapshot::collect(root);
+        let tree =
+            Tree::new(root.to_path_buf(), TreeMode::Normal, &git).expect("tree should build");
+
+        let deleted = tree
+            .entries
+            .iter()
+            .find(|entry| entry.name == "gone.txt")
+            .expect("gone.txt should exist");
+        assert!(!deleted.exists_on_disk);
+    }
+
+    #[test]
+    fn changed_mode_shows_missing_parent_directories_for_deleted_entries() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let root = tmp.path();
+        let repo = Repository::init(root).expect("git init should succeed");
+        fs::create_dir_all(root.join("src/nested")).expect("dirs should create");
+        fs::write(root.join("src/nested/gone.txt"), "v1").expect("file should write");
+        commit_all(&repo, "initial");
+        fs::remove_file(root.join("src/nested/gone.txt")).expect("file should delete");
+        fs::remove_dir(root.join("src/nested")).expect("dir should delete");
+        fs::remove_dir(root.join("src")).expect("dir should delete");
+
+        let git = GitSnapshot::collect(root);
+        let mut tree =
+            Tree::new(root.to_path_buf(), TreeMode::Changed, &git).expect("tree should build");
+
+        assert_eq!(tree.entries.len(), 1);
+        assert_eq!(tree.entries[0].name, "src");
+        assert!(tree.entries[0].is_dir);
+        assert!(!tree.entries[0].exists_on_disk);
+
+        tree.expand_selected().expect("expand should work");
+        assert_eq!(tree.entries[1].name, "nested");
+        assert!(tree.entries[1].is_dir);
+        assert!(!tree.entries[1].exists_on_disk);
+
+        tree.move_down();
+        tree.expand_selected().expect("expand nested should work");
+        assert_eq!(tree.entries[2].name, "gone.txt");
+        assert!(!tree.entries[2].exists_on_disk);
     }
 
     #[test]
