@@ -15,8 +15,6 @@ pub enum HelpLanguage {
 #[derive(Debug, Default, Deserialize)]
 pub struct Config {
     #[serde(default)]
-    pub layout: LayoutConfig,
-    #[serde(default)]
     pub help: HelpConfig,
 }
 
@@ -24,21 +22,6 @@ pub struct Config {
 pub struct HelpConfig {
     #[serde(default)]
     pub language: HelpLanguage,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LayoutConfig {
-    pub tree_ratio_normal: u16,
-    pub tree_ratio_preview_focused: u16,
-}
-
-impl Default for LayoutConfig {
-    fn default() -> Self {
-        Self {
-            tree_ratio_normal: 75,
-            tree_ratio_preview_focused: 5,
-        }
-    }
 }
 
 impl Config {

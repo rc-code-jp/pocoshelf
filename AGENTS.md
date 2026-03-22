@@ -9,7 +9,6 @@ Goal: keep changes safe, reviewable, and aligned with the current product direct
 - Type: Rust TUI application
 - Core features:
   - File tree view (startup-root locked)
-  - Text preview (UTF-8 only, max size limit)
   - Git-aware coloring (`modified`, `added`, `deleted`, `untracked`)
   - Copy selected path as startup-root-relative path with `@` prefix (example: `@docs/sample.txt`)
 - Runtime targets: macOS and Linux
@@ -25,9 +24,8 @@ When instructions conflict, follow this order:
 ## Repository Map
 - `src/main.rs`: app entrypoint, terminal lifecycle, event loop
 - `src/app.rs`: app state, command handling, copy path logic
-- `src/ui.rs`: layout/rendering (vertical split: tree top 20%, preview bottom 80%)
+- `src/ui.rs`: layout/rendering (single tree pane + status + help modal)
 - `src/tree.rs`: tree model, navigation, root-boundary behavior
-- `src/preview.rs`: preview loading and guards (size, UTF-8, binary detection)
 - `src/git_status.rs`: git status collection and folder state aggregation
 - `src/input.rs`: key bindings
 - `.github/workflows/release.yml`: release automation
@@ -43,10 +41,6 @@ When instructions conflict, follow this order:
 ### 2) Safety constraints
 - Never allow navigation above startup root.
 - Keep `@`-relative path format stable.
-- Keep preview rules stable unless requirement changes:
-  - UTF-8 text only
-  - reject binary content
-  - enforce max preview size
 
 ### 3) Coding standards
 - Prefer small, composable functions.
@@ -69,7 +63,7 @@ Minimum checks before merge:
 ## Change Checklist (for agents)
 Before finalizing a change, verify:
 1. Requirement is fully implemented.
-2. No behavior regressions in tree navigation and preview.
+2. No behavior regressions in tree navigation.
 3. `@`-relative copy still works from startup root.
 4. Git coloring still covers file and directory aggregation.
 5. Tests pass locally or explain why they could not run.
@@ -85,9 +79,8 @@ If release process changes, also update:
 
 ## Non-goals (unless explicitly requested)
 - Windows support
-- Non-UTF-8 preview decoding
 - Config system and runtime key remapping
-- Feature expansion unrelated to file tree/preview/git visibility
+- Feature expansion unrelated to file tree/git visibility
 
 ## Communication Style for Agent PRs
 - Describe user-visible changes first.
