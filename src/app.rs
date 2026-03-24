@@ -83,7 +83,7 @@ pub struct ContextMenu {
 }
 
 impl ContextMenu {
-    pub const ITEM_COUNT: usize = 5;
+    pub const ITEM_COUNT: usize = 6;
 
     fn new(column: u16, row: u16) -> Self {
         Self {
@@ -441,7 +441,8 @@ impl App {
             1 => self.copy_cat_command(),
             2 => self.copy_vi_command(),
             3 => return self.open_in_vi(),
-            4 => {} // cancel
+            4 => self.open_in_finder(),
+            5 => {} // cancel
             _ => {}
         }
         None
