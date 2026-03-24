@@ -76,6 +76,36 @@ impl HelpState {
     }
 }
 
+pub struct ContextMenu {
+    pub position: (u16, u16),
+    pub selected: usize,
+    pub hovered: Option<usize>,
+}
+
+impl ContextMenu {
+    pub const ITEM_COUNT: usize = 5;
+
+    fn new(column: u16, row: u16) -> Self {
+        Self {
+            position: (column, row),
+            selected: 0,
+            hovered: None,
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if self.selected + 1 < Self::ITEM_COUNT {
+            self.selected += 1;
+        }
+    }
+}
+
 pub struct App {
     pub startup_root: PathBuf,
     pub tree: Tree,
@@ -86,6 +116,7 @@ pub struct App {
     pub last_git_refresh: Instant,
     pub should_quit: bool,
     pub help: HelpState,
+    pub context_menu: Option<ContextMenu>,
     clipboard: Option<Clipboard>,
     status_expires_at: Option<Instant>,
     git_refresh_tx: Sender<GitSnapshot>,
@@ -158,6 +189,7 @@ impl App {
             last_git_refresh: Instant::now(),
             should_quit: false,
             help: HelpState::new(help_language),
+            context_menu: None,
             clipboard: Clipboard::new().ok(),
             status_expires_at: None,
             git_refresh_tx,
@@ -177,6 +209,25 @@ impl App {
 
     pub fn handle_command(&mut self, command: Command) -> Option<AppEffect> {
         self.poll_background_tasks();
+
+        if self.context_menu.is_some() {
+            match command {
+                Command::MoveUp => {
+                    if let Some(menu) = self.context_menu.as_mut() {
+                        menu.move_up();
+                    }
+                }
+                Command::MoveDown => {
+                    if let Some(menu) = self.context_menu.as_mut() {
+                        menu.move_down();
+                    }
+                }
+                Command::ExpandOrOpen => return self.execute_context_menu_selection(),
+                Command::Quit | Command::Collapse => self.context_menu = None,
+                _ => {}
+            }
+            return None;
+        }
 
         if self.help.visible {
             match command {
@@ -355,7 +406,71 @@ impl App {
         }
 
         self.ensure_tree_selection_visible();
-        self.copy_relative_path();
+        self.context_menu = Some(ContextMenu::new(column, row));
+    }
+
+    pub fn handle_context_menu_left_click(
+        &mut self,
+        terminal_area: Rect,
+        column: u16,
+        row: u16,
+    ) -> Option<AppEffect> {
+        if let Some(index) = ui::context_menu_item_at(terminal_area, self, column, row) {
+            if let Some(menu) = self.context_menu.as_mut() {
+                menu.selected = index;
+            }
+            self.execute_context_menu_selection()
+        } else {
+            self.context_menu = None;
+            None
+        }
+    }
+
+    pub fn update_context_menu_hover(&mut self, terminal_area: Rect, column: u16, row: u16) {
+        let hovered = ui::context_menu_item_at(terminal_area, self, column, row);
+        if let Some(menu) = self.context_menu.as_mut() {
+            menu.hovered = hovered;
+        }
+    }
+
+    fn execute_context_menu_selection(&mut self) -> Option<AppEffect> {
+        let selected = self.context_menu.as_ref().map(|m| m.selected).unwrap_or(0);
+        self.context_menu = None;
+        match selected {
+            0 => self.copy_relative_path(),
+            1 => self.copy_cat_command(),
+            2 => self.copy_vi_command(),
+            3 => return self.open_in_vi(),
+            4 => {} // cancel
+            _ => {}
+        }
+        None
+    }
+
+    fn copy_cat_command(&mut self) {
+        self.copy_shell_command("cat");
+    }
+
+    fn copy_vi_command(&mut self) {
+        self.copy_shell_command("vi");
+    }
+
+    fn copy_shell_command(&mut self, command: &str) {
+        let selected = self.tree.selected_path();
+        match format_relative_path(&self.startup_root, selected) {
+            Ok(rel_path) => {
+                let text = format!("{command} {rel_path}");
+                if let Some(clipboard) = self.clipboard.as_mut() {
+                    match clipboard.set_text(text.clone()) {
+                        Ok(()) => self.set_temporary_status(format!("copied: {text}")),
+                        Err(err) => self.set_temporary_status(format!("copy failed: {err}")),
+                    }
+                } else {
+                    self.set_temporary_status("clipboard unavailable");
+                }
+            }
+            Err(err) => self.set_temporary_status(format!("copy failed: {err}")),
+        }
     }
 
     pub fn update_tree_hover(&mut self, terminal_area: Rect, column: u16, row: u16) {
@@ -617,6 +732,16 @@ pub fn format_relative_with_at(startup_root: &Path, selected: &Path) -> anyhow::
     let mut out = String::from("@");
     out.push_str(&normalize_to_slashes(relative));
     Ok(out)
+}
+
+fn format_relative_path(startup_root: &Path, selected: &Path) -> anyhow::Result<String> {
+    let relative = selected.strip_prefix(startup_root)?;
+
+    if relative.as_os_str().is_empty() {
+        return Ok(String::from("."));
+    }
+
+    Ok(normalize_to_slashes(relative))
 }
 
 fn normalize_to_slashes(path: &Path) -> String {
@@ -1042,7 +1167,7 @@ mod tests {
     }
 
     #[test]
-    fn tree_right_click_copies_deleted_file() {
+    fn tree_right_click_opens_context_menu_for_deleted_file() {
         let tmp = tempdir().expect("tmpdir should exist");
         let root = tmp.path();
         let repo = Repository::init(root).expect("git init should succeed");
@@ -1051,16 +1176,16 @@ mod tests {
         fs::remove_file(root.join("gone.txt")).expect("delete should succeed");
 
         let mut app = App::new(root.to_path_buf(), TreeMode::Normal).expect("app should build");
-        app.clipboard = None;
         select_by_file_name(&mut app, "gone.txt");
         let index = app.tree.selected_index();
-        let terminal_area = Rect::new(0, 0, 20, 10);
+        let terminal_area = Rect::new(0, 0, 40, 10);
         let tree_area = ui::tree_area(terminal_area, &app);
         let row = tree_area.y + 1 + index as u16;
 
         app.handle_tree_right_click(terminal_area, tree_area.x + 1, row);
 
-        assert_eq!(app.status_message, "clipboard unavailable");
+        assert!(app.context_menu.is_some());
+        assert_eq!(app.context_menu.as_ref().unwrap().selected, 0);
     }
 
     #[test]
@@ -1081,37 +1206,90 @@ mod tests {
     }
 
     #[test]
-    fn tree_right_click_copies_selected_file() {
+    fn tree_right_click_opens_context_menu() {
         let tmp = tempdir().expect("tmpdir should exist");
         fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
         fs::write(tmp.path().join("b.txt"), "b").expect("write should succeed");
         let mut app =
             App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
-        app.clipboard = None;
-        let terminal_area = Rect::new(0, 0, 20, 10);
+        let terminal_area = Rect::new(0, 0, 40, 10);
         let tree_area = ui::tree_area(terminal_area, &app);
 
         app.handle_tree_right_click(terminal_area, tree_area.x + 1, tree_area.y + 2);
 
+        assert!(app.context_menu.is_some());
         assert_eq!(app.tree.selected_path(), tmp.path().join("b.txt").as_path());
-        assert_eq!(app.status_message, "clipboard unavailable");
     }
 
     #[test]
-    fn tree_right_click_on_directory_does_not_expand() {
+    fn tree_right_click_on_directory_opens_menu_without_expand() {
         let tmp = tempdir().expect("tmpdir should exist");
         fs::create_dir_all(tmp.path().join("sub")).expect("create dir should succeed");
         fs::write(tmp.path().join("sub/note.txt"), "hello").expect("write should succeed");
         let mut app =
             App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
-        let terminal_area = Rect::new(0, 0, 20, 10);
+        let terminal_area = Rect::new(0, 0, 40, 10);
         let tree_area = ui::tree_area(terminal_area, &app);
 
         app.handle_tree_right_click(terminal_area, tree_area.x + 1, tree_area.y + 1);
 
         assert_eq!(app.tree.entries.len(), 1);
         assert_eq!(app.tree.selected_path(), tmp.path().join("sub").as_path());
-        assert_eq!(app.status_message, "copied: @sub");
+        assert!(app.context_menu.is_some());
+    }
+
+    #[test]
+    fn context_menu_executes_copy_path_on_first_item() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let terminal_area = Rect::new(0, 0, 40, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        app.handle_tree_right_click(terminal_area, tree_area.x + 1, tree_area.y + 1);
+        assert!(app.context_menu.is_some());
+
+        // Execute first item (@ copy)
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        assert!(app.context_menu.is_none());
+        assert!(app.status_message.starts_with("copied: @"));
+    }
+
+    #[test]
+    fn context_menu_executes_cat_command_on_second_item() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        app.clipboard = None;
+        let terminal_area = Rect::new(0, 0, 40, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        app.handle_tree_right_click(terminal_area, tree_area.x + 1, tree_area.y + 1);
+        let _ = app.handle_command(Command::MoveDown);
+        assert_eq!(app.context_menu.as_ref().unwrap().selected, 1);
+
+        let _ = app.handle_command(Command::ExpandOrOpen);
+        assert!(app.context_menu.is_none());
+        assert_eq!(app.status_message, "clipboard unavailable");
+    }
+
+    #[test]
+    fn context_menu_closes_on_escape() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        fs::write(tmp.path().join("a.txt"), "a").expect("write should succeed");
+        let mut app =
+            App::new(tmp.path().to_path_buf(), TreeMode::Normal).expect("app should build");
+        let terminal_area = Rect::new(0, 0, 40, 10);
+        let tree_area = ui::tree_area(terminal_area, &app);
+
+        app.handle_tree_right_click(terminal_area, tree_area.x + 1, tree_area.y + 1);
+        assert!(app.context_menu.is_some());
+
+        let _ = app.handle_command(Command::Quit);
+        assert!(app.context_menu.is_none());
+        assert!(!app.should_quit);
     }
 
     #[test]

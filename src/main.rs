@@ -114,7 +114,41 @@ fn run(
                     let terminal_size = terminal.size()?;
                     let terminal_area = Rect::new(0, 0, terminal_size.width, terminal_size.height);
 
-                    if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    if app.context_menu.is_some() {
+                        if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
+                            if let Some(effect) = app.handle_context_menu_left_click(
+                                terminal_area,
+                                mouse_event.column,
+                                mouse_event.row,
+                            ) {
+                                match effect {
+                                    AppEffect::OpenInVi(path) => {
+                                        match open_in_vi(terminal, &path) {
+                                            Ok(()) => {
+                                                app.set_external_status(format!(
+                                                    "opened in vi: {}",
+                                                    path.display()
+                                                ));
+                                            }
+                                            Err(err) => {
+                                                app.set_external_status(format!(
+                                                    "open failed: {err}"
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else if matches!(mouse_event.kind, MouseEventKind::Moved) {
+                            app.update_context_menu_hover(
+                                terminal_area,
+                                mouse_event.column,
+                                mouse_event.row,
+                            );
+                        } else if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Right)) {
+                            app.context_menu = None;
+                        }
+                    } else if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
                         if let Some(effect) = app.handle_tree_left_click(
                             terminal_area,
                             mouse_event.column,

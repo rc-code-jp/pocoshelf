@@ -4,7 +4,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, ContextMenu};
 use crate::config::HelpLanguage;
 use crate::git_status::GitState;
 use crate::tree::DirEntryNode;
@@ -12,6 +12,8 @@ use crate::tree::DirEntryNode;
 const TREE_COLUMN_GAP: usize = 2;
 const TREE_DATE_WIDTH: usize = 10;
 const TREE_MIN_NAME_WIDTH: usize = 12;
+const CONTEXT_MENU_WIDTH: u16 = 24;
+const CONTEXT_MENU_HEIGHT: u16 = 7; // 5 items + 2 border lines
 
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let outer = outer_layout(frame.area());
@@ -20,6 +22,9 @@ pub fn render(frame: &mut Frame<'_>, app: &App) {
     render_status(frame, app, outer[1]);
     if app.help.visible {
         render_help(frame, app, frame.area());
+    }
+    if let Some(menu) = &app.context_menu {
+        render_context_menu(frame, menu, frame.area());
     }
 }
 
@@ -359,7 +364,7 @@ fn help_content(language: HelpLanguage) -> (&'static str, Vec<Line<'static>>) {
             lines.extend(help_entry("h / Left", "Collapse dir or move to parent"));
             lines.extend(help_entry("l / Right / Enter", "Toggle selected directory"));
             lines.extend(help_entry("Left click", "Select files, toggle directories"));
-            lines.extend(help_entry("Right click", "Copy @-relative path"));
+            lines.extend(help_entry("Right click", "Open copy menu"));
             lines.extend(help_entry("Mouse wheel on tree", "Scroll tree by 3 lines"));
             lines.extend(help_blank());
             lines.extend(help_section("General"));
@@ -389,10 +394,7 @@ fn help_content(language: HelpLanguage) -> (&'static str, Vec<Line<'static>>) {
                 "左クリック",
                 "ファイルを選択し、ディレクトリなら開閉",
             ));
-            lines.extend(help_entry(
-                "ファイルをダブルクリック",
-                "@ 付き相対パスをコピー",
-            ));
+            lines.extend(help_entry("右クリック", "コピーメニューを表示"));
             lines.extend(help_entry("ツリー上のマウスホイール", "3行ずつスクロール"));
             lines.extend(help_blank());
             lines.extend(help_section("一般"));
@@ -449,6 +451,69 @@ fn render_help(frame: &mut Frame<'_>, app: &App, area: Rect) {
             .wrap(Wrap { trim: false }),
         popup,
     );
+}
+
+fn context_menu_rect(menu: &ContextMenu, area: Rect) -> Rect {
+    let (click_x, click_y) = menu.position;
+    let x = if click_x + CONTEXT_MENU_WIDTH <= area.width {
+        click_x
+    } else {
+        click_x.saturating_sub(CONTEXT_MENU_WIDTH)
+    };
+    let y = if click_y + CONTEXT_MENU_HEIGHT <= area.height {
+        click_y
+    } else {
+        click_y.saturating_sub(CONTEXT_MENU_HEIGHT)
+    };
+    Rect::new(x, y, CONTEXT_MENU_WIDTH, CONTEXT_MENU_HEIGHT)
+}
+
+pub fn context_menu_item_at(
+    area: Rect,
+    app: &App,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let menu = app.context_menu.as_ref()?;
+    let rect = context_menu_rect(menu, area);
+    let inner_x = column.checked_sub(rect.x + 1)?;
+    let inner_y = row.checked_sub(rect.y + 1)?;
+    let inner_width = rect.width.saturating_sub(2);
+    if inner_width == 0 || inner_x >= inner_width {
+        return None;
+    }
+    let index = usize::from(inner_y);
+    if index < ContextMenu::ITEM_COUNT {
+        Some(index)
+    } else {
+        None
+    }
+}
+
+fn render_context_menu(frame: &mut Frame<'_>, menu: &ContextMenu, area: Rect) {
+    let rect = context_menu_rect(menu, area);
+    let inner_width = rect.width.saturating_sub(2) as usize;
+
+    let labels = ["@ copy path", "cat command copy", "vi command copy", "open in vi", "cancel"];
+    let mut lines = Vec::new();
+    for (i, label) in labels.iter().enumerate() {
+        let is_selected = i == menu.selected;
+        let is_hovered = menu.hovered == Some(i) && !is_selected;
+        let mut style = Style::default();
+        if is_selected {
+            style = style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
+        } else if is_hovered {
+            style = style.bg(Color::DarkGray);
+        }
+        let text = pad_to_width(&truncate_to_width(label, inner_width), inner_width);
+        lines.push(Line::from(Span::styled(text, style)));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    frame.render_widget(Clear, rect);
+    frame.render_widget(Paragraph::new(lines).block(block), rect);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
