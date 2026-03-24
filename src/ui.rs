@@ -13,7 +13,7 @@ const TREE_COLUMN_GAP: usize = 2;
 const TREE_DATE_WIDTH: usize = 10;
 const TREE_MIN_NAME_WIDTH: usize = 12;
 const CONTEXT_MENU_WIDTH: u16 = 24;
-const CONTEXT_MENU_HEIGHT: u16 = 8; // 6 items + 2 border lines
+const CONTEXT_MENU_HEIGHT: u16 = 7; // 5 items + 2 border lines
 
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let outer = outer_layout(frame.area());
@@ -371,7 +371,6 @@ fn help_content(language: HelpLanguage) -> (&'static str, Vec<Line<'static>>) {
             lines.extend(help_entry("Tab", "Toggle tree mode (normal <-> changed)"));
             lines.extend(help_entry("r", "Refresh git status"));
             lines.extend(help_entry("c", "Copy @-relative path"));
-            lines.extend(help_entry("v", "Open selected file in vi"));
             lines.extend(help_entry("o", "Open selected location in Finder"));
             lines.extend(help_entry("t", "Switch help language (English <-> 日本語)"));
             lines.extend(help_entry("q / Esc / Ctrl+c", "Quit"));
@@ -404,7 +403,6 @@ fn help_content(language: HelpLanguage) -> (&'static str, Vec<Line<'static>>) {
             ));
             lines.extend(help_entry("r", "Git ステータス更新"));
             lines.extend(help_entry("c", "@ 付き相対パスをコピー"));
-            lines.extend(help_entry("v", "選択ファイルを vi で開く"));
             lines.extend(help_entry("o", "選択位置を Finder で開く"));
             lines.extend(help_entry("t", "ヘルプ言語を切り替え (English <-> 日本語)"));
             lines.extend(help_entry("q / Esc / Ctrl+c", "終了"));
@@ -494,7 +492,7 @@ fn render_context_menu(frame: &mut Frame<'_>, menu: &ContextMenu, area: Rect) {
     let rect = context_menu_rect(menu, area);
     let inner_width = rect.width.saturating_sub(2) as usize;
 
-    let labels = ["@ copy path", "cat command copy", "vi command copy", "open in vi", "open in Finder", "cancel"];
+    let labels = ["@ copy path", "cat command copy", "vi command copy", "open in Finder", "cancel"];
     let mut lines = Vec::new();
     for (i, label) in labels.iter().enumerate() {
         let is_selected = i == menu.selected;

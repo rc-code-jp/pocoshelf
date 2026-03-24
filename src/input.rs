@@ -15,7 +15,6 @@ pub fn map_event(key: KeyEvent) -> Option<Command> {
         (KeyCode::Char('h'), _) | (KeyCode::Left, _) => Some(Command::Collapse),
         (KeyCode::Char('r'), _) => Some(Command::RefreshGit),
         (KeyCode::Tab, _) => Some(Command::ToggleTreeMode),
-        (KeyCode::Char('v'), _) => Some(Command::OpenInVi),
         (KeyCode::Char('?'), _) | (KeyCode::F(1), _) => Some(Command::ToggleHelp),
         (KeyCode::Char('t'), _) => Some(Command::ToggleHelpLanguage),
         (KeyCode::Char('c'), _) => Some(Command::CopyRelativePath),
@@ -63,9 +62,4 @@ mod tests {
         assert!(matches!(map_event(event), Some(Command::ToggleTreeMode)));
     }
 
-    #[test]
-    fn v_maps_to_open_in_vi() {
-        let event = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
-        assert!(matches!(map_event(event), Some(Command::OpenInVi)));
-    }
 }

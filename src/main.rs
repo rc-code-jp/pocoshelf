@@ -6,9 +6,7 @@ mod tree;
 mod ui;
 
 use std::io;
-use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command as ProcessCommand;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -25,7 +23,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
-use crate::app::{App, AppEffect};
+use crate::app::App;
 use crate::input::map_event;
 use crate::tree::TreeMode;
 
@@ -92,21 +90,7 @@ fn run(
             match event::read()? {
                 Event::Key(key_event) => {
                     if let Some(command) = map_event(key_event) {
-                        if let Some(effect) = app.handle_command(command) {
-                            match effect {
-                                AppEffect::OpenInVi(path) => match open_in_vi(terminal, &path) {
-                                    Ok(()) => {
-                                        app.set_external_status(format!(
-                                            "opened in vi: {}",
-                                            path.display()
-                                        ));
-                                    }
-                                    Err(err) => {
-                                        app.set_external_status(format!("open failed: {err}"));
-                                    }
-                                },
-                            }
-                        }
+                        app.handle_command(command);
                     }
                 }
                 Event::FocusGained => app.on_focus_gained(),
@@ -116,29 +100,11 @@ fn run(
 
                     if app.context_menu.is_some() {
                         if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
-                            if let Some(effect) = app.handle_context_menu_left_click(
+                            app.handle_context_menu_left_click(
                                 terminal_area,
                                 mouse_event.column,
                                 mouse_event.row,
-                            ) {
-                                match effect {
-                                    AppEffect::OpenInVi(path) => {
-                                        match open_in_vi(terminal, &path) {
-                                            Ok(()) => {
-                                                app.set_external_status(format!(
-                                                    "opened in vi: {}",
-                                                    path.display()
-                                                ));
-                                            }
-                                            Err(err) => {
-                                                app.set_external_status(format!(
-                                                    "open failed: {err}"
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            );
                         } else if matches!(mouse_event.kind, MouseEventKind::Moved) {
                             app.update_context_menu_hover(
                                 terminal_area,
@@ -149,25 +115,11 @@ fn run(
                             app.context_menu = None;
                         }
                     } else if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
-                        if let Some(effect) = app.handle_tree_left_click(
+                        app.handle_tree_left_click(
                             terminal_area,
                             mouse_event.column,
                             mouse_event.row,
-                        ) {
-                            match effect {
-                                AppEffect::OpenInVi(path) => match open_in_vi(terminal, &path) {
-                                    Ok(()) => {
-                                        app.set_external_status(format!(
-                                            "opened in vi: {}",
-                                            path.display()
-                                        ));
-                                    }
-                                    Err(err) => {
-                                        app.set_external_status(format!("open failed: {err}"));
-                                    }
-                                },
-                            }
-                        }
+                        );
                     } else if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Right)) {
                         app.handle_tree_right_click(
                             terminal_area,
@@ -198,23 +150,6 @@ fn run(
     }
 
     Ok(())
-}
-
-fn open_in_vi(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, path: &Path) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-
-    let vi_result = ProcessCommand::new("vi").arg(path).status();
-
-    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-    enable_raw_mode()?;
-    terminal.clear()?;
-
-    match vi_result {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => anyhow::bail!("vi exited with status: {status}"),
-        Err(err) => anyhow::bail!("failed to launch vi: {err}"),
-    }
 }
 
 fn resolve_startup_root(path: Option<PathBuf>) -> Result<PathBuf> {
