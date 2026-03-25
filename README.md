@@ -5,13 +5,7 @@
 
 エージェントに修正を任せつつ、開発者が手元で「今どこを見ているか」「何が変わっているか」をサクッと確認する用途に向いています。
 
----
-
-
-https://github.com/user-attachments/assets/d7cdce56-cc38-427e-96fe-414776178045
-
-
----
+https://github.com/user-attachments/assets/83a1a710-89cd-4e31-8601-7c8e6f3cdce4
 
 ## できること
 
