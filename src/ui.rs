@@ -13,7 +13,7 @@ const TREE_COLUMN_GAP: usize = 2;
 const TREE_DATE_WIDTH: usize = 10;
 const TREE_MIN_NAME_WIDTH: usize = 12;
 const CONTEXT_MENU_WIDTH: u16 = 24;
-const CONTEXT_MENU_HEIGHT: u16 = 7; // 5 items + 2 border lines
+const CONTEXT_MENU_HEIGHT: u16 = 8; // 6 items + 2 border lines
 
 pub fn render(frame: &mut Frame<'_>, app: &App) {
     let outer = outer_layout(frame.area());
@@ -492,7 +492,7 @@ fn render_context_menu(frame: &mut Frame<'_>, menu: &ContextMenu, area: Rect) {
     let rect = context_menu_rect(menu, area);
     let inner_width = rect.width.saturating_sub(2) as usize;
 
-    let labels = ["@ copy path", "cat command copy", "vi command copy", "open in Finder", "cancel"];
+    let labels = ["@ copy path", "copy path", "cat command copy", "vi command copy", "open in Finder", "cancel"];
     let mut lines = Vec::new();
     for (i, label) in labels.iter().enumerate() {
         let is_selected = i == menu.selected;

@@ -83,7 +83,7 @@ pub struct ContextMenu {
 }
 
 impl ContextMenu {
-    pub const ITEM_COUNT: usize = 5;
+    pub const ITEM_COUNT: usize = 6;
 
     fn new(column: u16, row: u16) -> Self {
         Self {
@@ -142,6 +142,7 @@ pub enum Command {
     ToggleHelp,
     ToggleHelpLanguage,
     CopyRelativePath,
+    CopyPlainRelativePath,
     OpenInFinder,
     Quit,
 }
@@ -265,6 +266,7 @@ impl App {
             }
             Command::ToggleHelpLanguage => {}
             Command::CopyRelativePath => self.copy_relative_path(),
+            Command::CopyPlainRelativePath => self.copy_plain_relative_path(),
             Command::OpenInFinder => self.open_in_finder(),
             Command::Quit => self.should_quit = true,
         }
@@ -416,10 +418,11 @@ impl App {
         self.context_menu = None;
         match selected {
             0 => self.copy_relative_path(),
-            1 => self.copy_cat_command(),
-            2 => self.copy_vi_command(),
-            3 => self.open_in_finder(),
-            4 => {} // cancel
+            1 => self.copy_plain_relative_path(),
+            2 => self.copy_cat_command(),
+            3 => self.copy_vi_command(),
+            4 => self.open_in_finder(),
+            5 => {} // cancel
             _ => {}
         }
     }
@@ -510,6 +513,23 @@ impl App {
     fn copy_relative_path(&mut self) {
         let selected = self.tree.selected_path();
         match format_relative_with_at(&self.startup_root, selected) {
+            Ok(text) => {
+                if let Some(clipboard) = self.clipboard.as_mut() {
+                    match clipboard.set_text(text.clone()) {
+                        Ok(()) => self.set_temporary_status(format!("copied: {text}")),
+                        Err(err) => self.set_temporary_status(format!("copy failed: {err}")),
+                    }
+                } else {
+                    self.set_temporary_status("clipboard unavailable");
+                }
+            }
+            Err(err) => self.set_temporary_status(format!("copy failed: {err}")),
+        }
+    }
+
+    fn copy_plain_relative_path(&mut self) {
+        let selected = self.tree.selected_path();
+        match format_relative_path(&self.startup_root, selected) {
             Ok(text) => {
                 if let Some(clipboard) = self.clipboard.as_mut() {
                     match clipboard.set_text(text.clone()) {
