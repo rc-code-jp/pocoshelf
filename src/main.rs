@@ -7,7 +7,7 @@ mod ui;
 
 use std::io;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use clap::Parser;
@@ -23,9 +23,11 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
 
-use crate::app::App;
+use crate::app::{App, Command};
 use crate::input::map_event;
 use crate::tree::TreeMode;
+
+const DOUBLE_CLICK_THRESHOLD: Duration = Duration::from_millis(500);
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -72,6 +74,7 @@ fn run(
     initial_tree_mode: TreeMode,
 ) -> Result<()> {
     let mut app = App::new(startup_root, initial_tree_mode)?;
+    let mut last_left_click: Option<(Instant, u16, u16)> = None;
 
     while !app.should_quit {
         app.poll_background_tasks();
@@ -115,11 +118,27 @@ fn run(
                             app.context_menu = None;
                         }
                     } else if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left)) {
+                        let now = Instant::now();
+                        let is_double_click = last_left_click
+                            .map(|(t, c, r)| {
+                                now.duration_since(t) < DOUBLE_CLICK_THRESHOLD
+                                    && c == mouse_event.column
+                                    && r == mouse_event.row
+                            })
+                            .unwrap_or(false);
+
                         app.handle_tree_left_click(
                             terminal_area,
                             mouse_event.column,
                             mouse_event.row,
                         );
+
+                        if is_double_click && !app.tree.selected_is_dir() {
+                            app.handle_command(Command::CopyRelativePath);
+                            last_left_click = None;
+                        } else {
+                            last_left_click = Some((now, mouse_event.column, mouse_event.row));
+                        }
                     } else if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Right)) {
                         app.handle_tree_right_click(
                             terminal_area,
