@@ -322,8 +322,34 @@ jobs:
           formula="homebrew-tap/${FORMULA_PATH}"
 
           ruby -e '
+            require "fileutils"
+
             path, version, sha256 = ARGV
-            text = File.read(path)
+
+            if File.exist?(path)
+              text = File.read(path)
+            else
+              FileUtils.mkdir_p(File.dirname(path))
+              text = <<~RUBY
+                class Pocoshelf < Formula
+                  desc "Rust TUI file explorer with git-aware coloring"
+                  homepage "https://github.com/rc-code-jp/pocoshelf"
+                  version "#{version}"
+
+                  url "https://github.com/rc-code-jp/pocoshelf/releases/download/v\#{version}/pocoshelf-\#{version}-aarch64-apple-darwin.tar.gz"
+                  sha256 "#{sha256}"
+
+                  def install
+                    bin.install "pocoshelf"
+                  end
+
+                  test do
+                    system "\#{bin}/pocoshelf", "--version"
+                  end
+                end
+              RUBY
+            end
+
             text.sub!(/^(\s*version\s+").*(")$/,"\\1#{version}\\2") or abort("version line not found")
             text.sub!(/^(\s*sha256\s+").*(")$/,"\\1#{sha256}\\2") or abort("sha256 line not found")
             File.write(path, text)
