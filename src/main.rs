@@ -136,7 +136,7 @@ fn run(
                             mouse_event.row,
                         );
 
-                        if is_double_click && !app.tree.selected_is_dir() {
+                        if is_double_click {
                             app.handle_command(Command::CopyPlainRelativePath);
                             last_left_click = None;
                         } else {
