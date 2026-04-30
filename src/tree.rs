@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::ValueEnum;
 
@@ -31,7 +30,6 @@ pub struct DirEntryNode {
     pub is_dir: bool,
     pub is_symlink: bool,
     pub exists_on_disk: bool,
-    pub modified_date: Option<String>,
     pub depth: usize,
     pub is_expanded: bool,
 }
@@ -313,14 +311,12 @@ fn read_directory_entries(
             }
 
             let name = entry.file_name().to_string_lossy().to_string();
-            let modified_date = load_entry_modified_date(&entry);
             entries.push(DirEntryNode {
                 path,
                 name,
                 is_dir,
                 is_symlink: file_type.is_symlink(),
                 exists_on_disk: true,
-                modified_date,
                 depth: 0,
                 is_expanded: false,
             });
@@ -386,7 +382,6 @@ fn collect_deleted_entries(
                 is_dir,
                 is_symlink: false,
                 exists_on_disk: false,
-                modified_date: None,
                 depth: 0,
                 is_expanded: false,
             });
@@ -419,37 +414,6 @@ fn is_changed_visible(path: &Path, is_dir: bool, changed_paths: &HashSet<PathBuf
     } else {
         changed_paths.contains(path)
     }
-}
-
-fn load_entry_modified_date(entry: &fs::DirEntry) -> Option<String> {
-    let metadata = match entry.metadata() {
-        Ok(metadata) => metadata,
-        Err(_) => return None,
-    };
-
-    metadata.modified().ok().and_then(format_system_time_date)
-}
-
-fn format_system_time_date(time: SystemTime) -> Option<String> {
-    let duration = time.duration_since(UNIX_EPOCH).ok()?;
-    let days = (duration.as_secs() / 86_400) as i64;
-    let (year, month, day) = civil_from_days(days);
-    Some(format!("{year:04}-{month:02}-{day:02}"))
-}
-
-fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
-    // 依存追加を避けるため、UNIX epoch から西暦日付へ変換する。
-    let z = days_since_epoch + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let day_of_era = z - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    let year = era * 400 + year_of_era + if month <= 2 { 1 } else { 0 };
-    (year, month, day)
 }
 
 fn collect_changed_paths(git: &GitSnapshot, mode: TreeMode) -> HashSet<PathBuf> {
@@ -717,41 +681,6 @@ mod tests {
         tree.expand_selected().expect("expand nested should work");
         assert_eq!(tree.entries[2].name, "gone.txt");
         assert!(!tree.entries[2].exists_on_disk);
-    }
-
-    #[test]
-    fn tree_collects_modified_date() {
-        let tmp = tempdir().expect("tmpdir should exist");
-        let root = tmp.path().join("root");
-        fs::create_dir_all(&root).expect("create root should work");
-        fs::write(root.join("note.txt"), "hello").expect("write file should work");
-
-        let tree =
-            Tree::new(root, TreeMode::Normal, &GitSnapshot::default()).expect("tree should build");
-        let file = tree
-            .entries
-            .iter()
-            .find(|entry| entry.name == "note.txt")
-            .expect("note.txt should exist");
-
-        assert_eq!(file.modified_date.as_deref().map(str::len), Some(10));
-    }
-
-    #[test]
-    fn tree_collects_modified_date_for_directories() {
-        let tmp = tempdir().expect("tmpdir should exist");
-        let root = tmp.path().join("root");
-        fs::create_dir_all(root.join("sub")).expect("create dir should work");
-
-        let tree =
-            Tree::new(root, TreeMode::Normal, &GitSnapshot::default()).expect("tree should build");
-        let dir = tree
-            .entries
-            .iter()
-            .find(|entry| entry.name == "sub")
-            .expect("sub should exist");
-
-        assert!(dir.modified_date.is_some());
     }
 
     #[cfg(unix)]

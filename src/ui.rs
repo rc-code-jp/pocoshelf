@@ -9,9 +9,6 @@ use crate::config::HelpLanguage;
 use crate::git_status::GitState;
 use crate::tree::DirEntryNode;
 
-const TREE_COLUMN_GAP: usize = 2;
-const TREE_DATE_WIDTH: usize = 10;
-const TREE_MIN_NAME_WIDTH: usize = 12;
 const CONTEXT_MENU_WIDTH: u16 = 24;
 const CONTEXT_MENU_HEIGHT: u16 = 8; // 6 items + 2 border lines
 
@@ -114,7 +111,6 @@ fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .entries
         .len()
         .min(scroll_offset.saturating_add(viewport_height.max(1)));
-    let columns = tree_columns(inner_width);
 
     let mut lines = Vec::with_capacity(end_index.saturating_sub(scroll_offset));
     for (absolute_index, node) in app.tree.entries[scroll_offset..end_index]
@@ -128,12 +124,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
         } else if app.hovered_tree_index == Some(absolute_index) {
             style = style.bg(Color::DarkGray);
         }
-        lines.push(render_tree_line(
-            node,
-            &columns,
-            style,
-            absolute_index == selected_index,
-        ));
+        lines.push(render_tree_line(node, inner_width, style));
     }
 
     let blank = " ".repeat(inner_width);
@@ -151,61 +142,12 @@ fn render_tree(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(tree, area);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TreeColumns {
-    name_width: usize,
-    date_width: Option<usize>,
-}
-
-fn tree_columns(inner_width: usize) -> TreeColumns {
-    if inner_width == 0 {
-        return TreeColumns {
-            name_width: 0,
-            date_width: None,
-        };
-    }
-
-    let min_name_width = TREE_MIN_NAME_WIDTH.min(inner_width);
-    let date_required = min_name_width + TREE_DATE_WIDTH + TREE_COLUMN_GAP;
-    if inner_width >= date_required {
-        return TreeColumns {
-            name_width: inner_width - TREE_DATE_WIDTH - TREE_COLUMN_GAP,
-            date_width: Some(TREE_DATE_WIDTH),
-        };
-    }
-
-    TreeColumns {
-        name_width: inner_width,
-        date_width: None,
-    }
-}
-
-fn render_tree_line(
-    node: &DirEntryNode,
-    columns: &TreeColumns,
-    style: Style,
-    is_selected: bool,
-) -> Line<'static> {
-    let mut spans = Vec::new();
+fn render_tree_line(node: &DirEntryNode, name_width: usize, style: Style) -> Line<'static> {
     let name_text = pad_to_width(
-        &truncate_to_width(&tree_name_text(node), columns.name_width),
-        columns.name_width,
+        &truncate_to_width(&tree_name_text(node), name_width),
+        name_width,
     );
-    spans.push(Span::styled(name_text, style));
-
-    if let Some(date_width) = columns.date_width {
-        spans.push(Span::styled(" ".repeat(TREE_COLUMN_GAP), style));
-        spans.push(Span::styled(
-            format!(
-                "{:>width$}",
-                node.modified_date.as_deref().unwrap_or(""),
-                width = date_width
-            ),
-            tree_meta_style(is_selected),
-        ));
-    }
-
-    Line::from(spans)
+    Line::from(Span::styled(name_text, style))
 }
 
 fn tree_name_text(node: &DirEntryNode) -> String {
@@ -236,14 +178,6 @@ fn tree_marker(node: &DirEntryNode) -> &'static str {
     } else {
         " "
     }
-}
-
-fn tree_meta_style(is_selected: bool) -> Style {
-    let mut style = Style::default().fg(Color::DarkGray);
-    if is_selected {
-        style = style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
-    }
-    style
 }
 
 fn truncate_to_width(text: &str, width: usize) -> String {
@@ -500,8 +434,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        help_entry, help_max_scroll, tree_area, tree_columns, tree_contains, tree_index_at,
-        tree_max_scroll, tree_name_text, tree_scroll_offset, DirEntryNode,
+        help_entry, help_max_scroll, tree_area, tree_contains, tree_index_at, tree_max_scroll,
+        tree_name_text, tree_scroll_offset, DirEntryNode,
     };
     use crate::app::App;
     use crate::config::HelpLanguage;
@@ -529,30 +463,6 @@ mod tests {
     fn help_max_scroll_grows_when_viewport_is_short() {
         let max_scroll = help_max_scroll(HelpLanguage::En, 4, 24);
         assert!(max_scroll > 0);
-    }
-
-    #[test]
-    fn tree_columns_show_name_and_date_when_wide_enough() {
-        let columns = tree_columns(40);
-
-        assert_eq!(columns.date_width, Some(10));
-        assert_eq!(columns.name_width, 28);
-    }
-
-    #[test]
-    fn tree_columns_hide_date_when_too_narrow() {
-        let columns = tree_columns(18);
-
-        assert_eq!(columns.date_width, None);
-        assert_eq!(columns.name_width, 18);
-    }
-
-    #[test]
-    fn tree_columns_hide_all_metadata_when_too_narrow() {
-        let columns = tree_columns(8);
-
-        assert_eq!(columns.date_width, None);
-        assert_eq!(columns.name_width, 8);
     }
 
     #[test]
@@ -625,21 +535,20 @@ mod tests {
 
     #[test]
     fn tree_name_text_shows_indent_and_marker_for_directory() {
-        let mut dir = sample_node("src", true, Some("2026-03-20"));
+        let mut dir = sample_node("src", true);
         dir.depth = 2;
         dir.is_expanded = true;
 
         assert_eq!(tree_name_text(&dir), "    ▼ src/");
     }
 
-    fn sample_node(name: &str, is_dir: bool, modified_date: Option<&str>) -> DirEntryNode {
+    fn sample_node(name: &str, is_dir: bool) -> DirEntryNode {
         DirEntryNode {
             path: PathBuf::from(name),
             name: name.to_string(),
             is_dir,
             is_symlink: false,
             exists_on_disk: true,
-            modified_date: modified_date.map(str::to_string),
             depth: 0,
             is_expanded: false,
         }
