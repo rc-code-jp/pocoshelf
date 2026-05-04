@@ -4,12 +4,11 @@
 
 ## 配布方針
 
-- 配布対象は macOS Apple Silicon (`aarch64-apple-darwin`) のみ
-- 一般ユーザー向け導線は Homebrew tap を優先
-- 配布元は GitHub Releases
-- `rc-code-jp/homebrew-tap` は release workflow から自動更新する
-- 最初は署名 / notarization なしで始められる
-- 必要になったら Developer ID 署名 + notarization を workflow に追加できる
+- 一般ユーザー向け導線は Nix flake を優先する
+- flake package は `aarch64-darwin` / `x86_64-darwin` / `aarch64-linux` / `x86_64-linux` を対象にする
+- GitHub Releases には macOS Apple Silicon (`aarch64-apple-darwin`) の tar.gz と `checksums.txt` を添付する
+- 最小構成では署名 / notarization なしで始められる
+- 必要になったら Developer ID 署名 + notarization を workflow で有効化できる
 
 ## Prerequisites
 
@@ -19,10 +18,10 @@
   - `cargo fmt --check`
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test`
-- `rc-code-jp/homebrew-tap` リポジトリが作成済みであること
-- `pocoshelf` リポジトリに共用 GitHub App `homebrew-sync` 用の `APP_ID` secret と `APP_PRIVATE_KEY` secret が設定済みであること
+  - `nix flake check`
+  - `nix build .#pocoshelf`
 
-## 最小構成でのリリース手順
+## リリース手順
 
 ### 1. リリース版を commit して push
 
@@ -47,56 +46,30 @@ git push origin v<version>
 - `pocoshelf-<version>-aarch64-apple-darwin.tar.gz`
 - `checksums.txt`
 
-### 3. 手動実行する場合（workflow_dispatch）
+### 3. 手動実行する場合
 
 GitHub Actions の `release` workflow を手動起動する場合は、`tag` 入力に `vX.Y.Z` 形式の既存タグを指定してください。
 
 - `tag` は必須
 - `v` で始まらない値は失敗
 
-### 4. workflow の自動更新結果を確認する
+### 4. リリース結果を確認する
 
-workflow は GitHub Release 公開後に `rc-code-jp/homebrew-tap` の `Formula/pocoshelf.rb` を自動更新します。
+GitHub Release 公開後に次を確認してください。
 
-Actions summary で次を確認してください。
+- Release tag と `Cargo.toml` の version が一致している
+- `pocoshelf-<version>-aarch64-apple-darwin.tar.gz` が添付されている
+- `checksums.txt` に release asset の sha256 が含まれている
 
-- `version`
-- `url`
-- `sha256`
-- `rc-code-jp/homebrew-tap` の更新結果
-
-`url` は次の形式です。
-
-```text
-https://github.com/rc-code-jp/pocoshelf/releases/download/v<version>/pocoshelf-<version>-aarch64-apple-darwin.tar.gz
-```
-
-### 5. 自動更新が失敗した場合だけ `rc-code-jp/homebrew-tap` を手動更新する
-
-`Formula/pocoshelf.rb` の最低限の更新箇所は次の 2 つです。
-
-```ruby
-version "<version>"
-sha256 "<checksums.txt の値>"
-```
-
-`url` は `#{version}` を参照するテンプレートにしておけば、通常は変更不要です。
-
-更新後に commit / push します。
+Nix flake 経由の利用者は、各自の設定リポジトリで `pocoshelf` input を更新して新しい版へ追従します。
 
 ```bash
-git add Formula/pocoshelf.rb
-git commit -m "pocoshelf <version>"
-git push origin main
+nix flake lock --update-input pocoshelf
 ```
-
-これでユーザーは `brew upgrade pocoshelf` で更新できます。
-
-GitHub App の設定方法は [`docs/github-app-homebrew-tap.md`](github-app-homebrew-tap.md) を参照してください。
 
 ## 推奨構成: Developer ID 署名 + notarization
 
-最小構成のままでも配布はできますが、一般ユーザー向け体験を優先するなら署名 + notarization を推奨します。
+最小構成のままでも配布はできますが、GitHub Releases から直接入れる macOS ユーザー向けには署名 + notarization を推奨します。
 
 ### Apple Developer 側の前提条件
 
@@ -134,7 +107,7 @@ GitHub App の設定方法は [`docs/github-app-homebrew-tap.md`](github-app-hom
 
 - `Invalid tag: ...`
   - `vX.Y.Z` 形式のタグか確認する
-- `Missing checksum for pocoshelf-...`
+- `checksums.txt` に asset がない
   - Release asset 名と `checksums.txt` の内容が一致しているか確認する
 - `codesign` / `notarytool` が失敗する
   - `APPLE_CODESIGN_ENABLED=true` のときだけ走るので、Secrets と証明書の内容を確認する

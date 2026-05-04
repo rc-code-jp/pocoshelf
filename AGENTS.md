@@ -12,7 +12,7 @@ Goal: keep changes safe, reviewable, and aligned with the current product direct
   - Git-aware coloring (`modified`, `added`, `deleted`, `untracked`)
   - Copy selected path as startup-root-relative path with `@` prefix (example: `@docs/sample.txt`)
 - Runtime targets: macOS and Linux
-- Distribution: GitHub Releases artifacts + Homebrew tap formula
+- Distribution: Nix flake + GitHub Releases artifacts
 
 ## Source of Truth
 When instructions conflict, follow this order:
@@ -28,8 +28,8 @@ When instructions conflict, follow this order:
 - `src/tree.rs`: tree model, navigation, root-boundary behavior
 - `src/git_status.rs`: git status collection and folder state aggregation
 - `src/input.rs`: key bindings
+- `flake.nix`: Nix package / app definition
 - `.github/workflows/release.yml`: release automation
-- `packaging/homebrew/pocoshelf.rb`: Homebrew formula template
 
 ## Agent Working Rules
 
@@ -72,7 +72,7 @@ Before finalizing a change, verify:
 ## Release Notes for Agents
 If a change affects packaging/distribution, update both:
 - `README.md` (maintainer/user flow)
-- `packaging/homebrew/pocoshelf.rb` template placeholders or instructions
+- `flake.nix` package metadata or dependency inputs
 
 If release process changes, also update:
 - `.github/workflows/release.yml`

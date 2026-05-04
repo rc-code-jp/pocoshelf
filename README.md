@@ -23,29 +23,45 @@ https://github.com/user-attachments/assets/83a1a710-89cd-4e31-8601-7c8e6f3cdce4
 
 ## インストール
 
-### 1) Homebrew tap（推奨）
+### 1) Nix flake（推奨）
 
-一般ユーザー向けの主導線です。Rust / Cargo は不要です。
-
-```bash
-brew tap rc-code-jp/tap
-brew install pocoshelf
-```
-
-アップデート:
+一時的に実行する場合:
 
 ```bash
-brew upgrade pocoshelf
+nix run github:rc-code-jp/pocoshelf -- .
 ```
 
-1 行で入れる場合:
+ユーザープロファイルにインストールする場合:
 
 ```bash
-brew install rc-code-jp/tap/pocoshelf
+nix profile install github:rc-code-jp/pocoshelf
 ```
 
-現在の配布ターゲット:
-- macOS Apple Silicon (`aarch64-apple-darwin`) のみ
+`nix-darwin` / `home-manager` の flake input として管理する場合は、設定リポジトリ側の `flake.nix` に input を追加します。
+
+```nix
+inputs = {
+  nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+  pocoshelf = {
+    url = "github:rc-code-jp/pocoshelf";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+};
+```
+
+`nix-darwin` の `environment.systemPackages` へ追加する例:
+
+```nix
+{ pkgs, inputs, ... }:
+
+{
+  environment.systemPackages = [
+    inputs.pocoshelf.packages.${pkgs.system}.default
+  ];
+}
+```
+
+flake は `aarch64-darwin` / `x86_64-darwin` / `aarch64-linux` / `x86_64-linux` を対象にしています。
 
 ### 2) GitHub Releases から直接入れる
 
@@ -179,31 +195,20 @@ pocoshelf --tree-mode normal ~/work/repo
 ### リリース手順
 
 1. `Cargo.toml` の `version` を次のリリース版に更新する
-2. `git commit` して `main` に push する
-3. リリースタグを push する
+2. `Cargo.lock` にルート package の version 更新を反映する
+3. `git commit` して `main` に push する
+4. リリースタグを push する
 
 ```bash
 git tag v<version>
 git push origin v<version>
 ```
 
-4. GitHub Actions の `release` workflow 完了後、Actions summary か GitHub Release の `checksums.txt` から次を確認する
+5. GitHub Actions の `release` workflow 完了後、GitHub Release の asset と `checksums.txt` を確認する
 - `version`
-- `url`
-- `sha256`
-- `rc-code-jp/homebrew-tap` の自動更新結果
+- `pocoshelf-<version>-aarch64-apple-darwin.tar.gz`
+- `checksums.txt`
 
-5. 自動更新が失敗した場合だけ `rc-code-jp/homebrew-tap` の `Formula/pocoshelf.rb` を手動更新して push する
-
-ユーザーはその後 `brew upgrade pocoshelf` で更新できます。
+Nix flake 経由の利用者は、各自の設定リポジトリで `pocoshelf` input を更新すると新しい版へ追従できます。
 
 詳細は [`docs/release.md`](docs/release.md) を参照してください。
-Homebrew tap 更新を GitHub App で自動化する場合は [`docs/github-app-homebrew-tap.md`](docs/github-app-homebrew-tap.md) を参照してください。
-このリポジトリの release workflow では、Node ランタイム依存のある JavaScript アクションを避けるため、GitHub App JWT と REST API で installation token を発行しています。
-
-### Homebrew formula テンプレート
-
-`packaging/homebrew/pocoshelf.rb` を `rc-code-jp/homebrew-tap` の `Formula/pocoshelf.rb` にコピーし、以下プレースホルダーを置換してください。
-
-- `__VERSION__`
-- `__SHA256_AARCH64_APPLE_DARWIN__`
